@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-/// Main browser page view combining the top bar, loading progress, and the WebStage.
+/// Main browser window view coordinating the top bar, loading progress, and tab stage.
 struct BrowserView: View {
     @ObservedObject var store: BrowserStore
 
@@ -21,17 +21,14 @@ struct BrowserView: View {
                 ProgressBarView(tab: activeTab)
             }
 
-            // Web Stage
-            ZStack {
-                WebStage(tab: store.activeTab)
+            // Tab Stage (observes activeTab directly so isBlank changes trigger immediate redraws)
+            if let activeTab = store.activeTab {
+                TabStageView(store: store, tab: activeTab)
+                    .id(activeTab.id)
+            } else {
+                Color(nsColor: .windowBackgroundColor)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                // Calm empty start state when no page is loaded
-                if let activeTab = store.activeTab, activeTab.isBlank {
-                    EmptyStateView(store: store)
-                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .background {
@@ -59,6 +56,28 @@ struct BrowserView: View {
             .opacity(0)
             .allowsHitTesting(false)
         }
+    }
+}
+
+/// Stage hosting the active tab's web view and empty state overlay.
+/// Observing `tab` directly ensures that when `tab.isBlank` changes, SwiftUI re-renders immediately.
+private struct TabStageView: View {
+    @ObservedObject var store: BrowserStore
+    @ObservedObject var tab: Tab
+
+    var body: some View {
+        ZStack {
+            WebStage(tab: tab)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Calm empty start state when tab has no URL loaded
+            if tab.isBlank {
+                EmptyStateView(store: store)
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.easeInOut(duration: 0.15), value: tab.isBlank)
     }
 }
 

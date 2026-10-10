@@ -25,6 +25,7 @@ struct TopBarView: View {
                     // Navigation Controls (Back, Forward, Reload)
                     if let activeTab = store.activeTab {
                         NavigationControls(tab: activeTab)
+                            .id(activeTab.id)
                     }
 
                     // Tab Strip
@@ -34,6 +35,7 @@ struct TopBarView: View {
                     // Omnibox / Address Bar
                     if let activeTab = store.activeTab {
                         AddressBarView(store: store, tab: activeTab)
+                            .id(activeTab.id)
                             .frame(minWidth: 160, maxWidth: .infinity)
                     }
                 }
