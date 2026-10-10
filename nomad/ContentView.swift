@@ -13,7 +13,7 @@ struct ContentView: View {
     var body: some View {
         BrowserView(store: store)
             .ignoresSafeArea()
-            .frame(minWidth: 700, minHeight: 450)
+            .frame(minWidth: 640, minHeight: 420)
     }
 }
 

@@ -13,14 +13,14 @@ struct TopBarView: View {
 
     var body: some View {
         ZStack {
-            // Allows dragging the macOS window by the top chrome
+            // Allows dragging the macOS window and double-click to zoom
             WindowDragArea()
 
             VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    // Traffic lights safe area (macOS native close/minimize/zoom buttons sit here)
+                HStack(spacing: 0) {
+                    // Traffic lights safe area: leaves even margins on both sides of the window controls
                     Color.clear
-                        .frame(width: 76, height: 38)
+                        .frame(width: 96, height: 50)
 
                     // Tab Strip (tabs + new tab '+' button)
                     TabStripView(store: store)
@@ -31,18 +31,17 @@ struct TopBarView: View {
                     if let activeTab = store.activeTab {
                         NavigationControls(tab: activeTab)
                             .id(activeTab.id)
-                            .padding(.trailing, 10)
+                            .padding(.trailing, 14)
                     }
                 }
-                .padding(.horizontal, 10)
-                .frame(height: 38)
+                .frame(height: 50)
 
-                // Divider line below the top bar
+                // Subtle hairline border separating top chrome from web stage
                 Divider()
                     .opacity(0.3)
             }
         }
-        .frame(height: 38)
+        .frame(height: 50)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 }

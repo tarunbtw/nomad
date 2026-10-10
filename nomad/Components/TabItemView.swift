@@ -86,16 +86,16 @@ struct TabItemView: View {
                 }
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 28)
+        .padding(.horizontal, 9)
+        .frame(height: 30)
         .frame(minWidth: isEditing ? 240 : 100, maxWidth: isEditing ? 420 : 200)
         .animation(.spring(response: 0.22, dampingFraction: 0.8), value: isEditing)
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(isActive ? Color.primary.opacity(0.08) : (isHovered ? Color.primary.opacity(0.04) : Color.clear))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(isEditing ? Color.accentColor.opacity(0.5) : (isActive ? Color.primary.opacity(0.06) : Color.clear), lineWidth: 1)
         )
         // Detects clicks outside the tab pill while editing and cancels editing immediately
@@ -106,7 +106,7 @@ struct TabItemView: View {
                 }
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(RoundedRectangle(cornerRadius: 7))
         .onHover { isHovered = $0 }
         .onTapGesture(count: 2) {
             startEditing()

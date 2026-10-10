@@ -14,6 +14,6 @@ struct nomadApp: App {
             ContentView()
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1000, height: 700)
+        .defaultSize(width: 1180, height: 780)
     }
 }
