@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-/// Top browser chrome housing traffic lights spacer, navigation buttons, tab strip, and omnibox.
+/// Top browser chrome housing traffic lights spacer, tab strip, and trailing navigation controls.
 struct TopBarView: View {
     @ObservedObject var store: BrowserStore
 
@@ -17,26 +17,21 @@ struct TopBarView: View {
             WindowDragArea()
 
             VStack(spacing: 0) {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     // Traffic lights safe area (macOS native close/minimize/zoom buttons sit here)
                     Color.clear
                         .frame(width: 76, height: 38)
 
-                    // Navigation Controls (Back, Forward, Reload)
+                    // Tab Strip (tabs + new tab '+' button)
+                    TabStripView(store: store)
+
+                    Spacer(minLength: 20)
+
+                    // Navigation Controls on the far right end (Back, Forward, Reload)
                     if let activeTab = store.activeTab {
                         NavigationControls(tab: activeTab)
                             .id(activeTab.id)
-                    }
-
-                    // Tab Strip
-                    TabStripView(store: store)
-                        .frame(maxWidth: 460)
-
-                    // Omnibox / Address Bar
-                    if let activeTab = store.activeTab {
-                        AddressBarView(store: store, tab: activeTab)
-                            .id(activeTab.id)
-                            .frame(minWidth: 160, maxWidth: .infinity)
+                            .padding(.trailing, 10)
                     }
                 }
                 .padding(.horizontal, 10)
@@ -44,7 +39,7 @@ struct TopBarView: View {
 
                 // Divider line below the top bar
                 Divider()
-                    .opacity(0.4)
+                    .opacity(0.3)
             }
         }
         .frame(height: 38)

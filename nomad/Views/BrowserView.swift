@@ -60,7 +60,6 @@ struct BrowserView: View {
 }
 
 /// Stage hosting the active tab's web view and empty state overlay.
-/// Observing `tab` directly ensures that when `tab.isBlank` changes, SwiftUI re-renders immediately.
 private struct TabStageView: View {
     @ObservedObject var store: BrowserStore
     @ObservedObject var tab: Tab
@@ -72,7 +71,7 @@ private struct TabStageView: View {
 
             // Calm empty start state when tab has no URL loaded
             if tab.isBlank {
-                EmptyStateView(store: store)
+                EmptyStateView(tab: tab, store: store)
                     .transition(.opacity)
             }
         }
@@ -81,55 +80,72 @@ private struct TabStageView: View {
     }
 }
 
-/// Minimal start canvas for blank tabs.
+/// Minimal start canvas for blank tabs: clean centered URL input field.
 private struct EmptyStateView: View {
+    @ObservedObject var tab: Tab
     @ObservedObject var store: BrowserStore
 
+    @State private var text: String = ""
+    @FocusState private var isFocused: Bool
+
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "safari")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(.tertiary)
+        ZStack {
+            Color(nsColor: .windowBackgroundColor)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    isFocused = true
+                }
 
-            VStack(spacing: 6) {
-                Text("Nomad")
-                    .font(.system(size: 20, weight: .medium, design: .rounded))
+            // Centered "Enter a web address" field
+            HStack(spacing: 8) {
+                TextField("Enter a web address", text: $text)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14.5, weight: .regular))
                     .foregroundStyle(.primary)
+                    .focused($isFocused)
+                    .onSubmit {
+                        submit()
+                    }
 
-                Text("Enter a website address or search query to browse")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
+                if !text.isEmpty {
+                    Button(action: { text = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-
-            HStack(spacing: 12) {
-                ShortcutHint(key: "⌘T", label: "New Tab")
-                ShortcutHint(key: "⌘L", label: "Focus Address")
-                ShortcutHint(key: "⌘W", label: "Close Tab")
-            }
-            .padding(.top, 8)
+            .padding(.horizontal, 16)
+            .frame(width: 480, height: 40)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(isFocused ? Color.accentColor.opacity(0.4) : Color.primary.opacity(0.12), lineWidth: 1)
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .onTapGesture {
-            store.isAddressBarFocused = true
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                isFocused = true
+            }
+        }
+        .onChange(of: store.isAddressBarFocused) { _, focused in
+            if focused {
+                isFocused = true
+                store.isAddressBarFocused = false
+            }
         }
     }
-}
 
-private struct ShortcutHint: View {
-    let key: String
-    let label: String
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Text(key)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4))
-            Text(label)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+    private func submit() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            tab.load(text: trimmed)
         }
     }
 }
