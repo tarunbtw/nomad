@@ -1,0 +1,99 @@
+//
+//  BrowserStore.swift
+//  nomad
+//
+//  Created by tarun on 10/10/26.
+//
+
+import SwiftUI
+import Combine
+
+/// Root state container for Nomad browser window.
+/// Manages open tabs, the currently focused tab, and browser actions.
+@MainActor
+final class BrowserStore: ObservableObject {
+    @Published var tabs: [Tab] = []
+    @Published var activeTabId: UUID?
+    @Published var isAddressBarFocused: Bool = false
+
+    var activeTab: Tab? {
+        tabs.first { $0.id == activeTabId }
+    }
+
+    init() {
+        // Start with an initial blank tab
+        let initialTab = newTab(url: nil, select: true)
+        _ = initialTab
+    }
+
+    /// Creates and appends a new tab.
+    @discardableResult
+    func newTab(url: URL? = nil, select: Bool = true) -> Tab {
+        let tab = Tab(initialURL: url)
+        
+        tab.onOpenURLInNewTab = { [weak self] targetURL in
+            self?.newTab(url: targetURL, select: true)
+        }
+        
+        tabs.append(tab)
+        
+        if select {
+            activeTabId = tab.id
+        }
+        
+        return tab
+    }
+
+    /// Closes the specified tab.
+    func closeTab(id: UUID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        
+        let isClosingActive = (activeTabId == id)
+        tabs.remove(at: index)
+        
+        // If the closed tab was active, choose an adjacent tab
+        if isClosingActive {
+            if tabs.isEmpty {
+                // Keep at least one tab open
+                newTab(url: nil, select: true)
+            } else {
+                let nextIndex = min(index, tabs.count - 1)
+                activeTabId = tabs[nextIndex].id
+            }
+        }
+    }
+
+    /// Selects a tab by ID.
+    func selectTab(id: UUID) {
+        if tabs.contains(where: { $0.id == id }) {
+            activeTabId = id
+        }
+    }
+
+    /// Selects the previous tab (⌘{ or Ctrl+Shift+Tab)
+    func selectPreviousTab() {
+        guard let currentId = activeTabId, let currentIndex = tabs.firstIndex(where: { $0.id == currentId }) else { return }
+        let prevIndex = (currentIndex - 1 + tabs.count) % tabs.count
+        activeTabId = tabs[prevIndex].id
+    }
+
+    /// Selects the next tab (⌘} or Ctrl+Tab)
+    func selectNextTab() {
+        guard let currentId = activeTabId, let currentIndex = tabs.firstIndex(where: { $0.id == currentId }) else { return }
+        let nextIndex = (currentIndex + 1) % tabs.count
+        activeTabId = tabs[nextIndex].id
+    }
+
+    // MARK: - Navigation convenience forwards
+    func goBack() {
+        activeTab?.goBack()
+    }
+
+    func goForward() {
+        activeTab?.goForward()
+    }
+
+    func reload() {
+        activeTab?.reload()
+    }
+}

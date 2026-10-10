@@ -8,12 +8,12 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var store = BrowserStore()
+
     var body: some View {
-        ZStack {
-            Color(nsColor: .windowBackgroundColor)
-                .ignoresSafeArea()
-        }
-        .frame(minWidth: 800, minHeight: 500)
+        BrowserView(store: store)
+            .ignoresSafeArea()
+            .frame(minWidth: 700, minHeight: 450)
     }
 }
 

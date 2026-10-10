@@ -86,6 +86,10 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         webView.reload()
     }
 
+    func stopLoading() {
+        webView.stopLoading()
+    }
+
     // MARK: - KVO Observers
     private func setupObservers() {
         observers.append(webView.observe(\.title, options: [.new]) { [weak self] wv, _ in
@@ -136,10 +140,12 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         self.isLoading = false
+        print("Tab Navigation failed: \(error.localizedDescription)")
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         self.isLoading = false
+        print("Tab Provisional navigation failed: \(error.localizedDescription)")
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
