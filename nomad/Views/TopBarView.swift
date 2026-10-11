@@ -27,9 +27,9 @@ struct TopBarView: View {
             WindowDragArea()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Navigation Controls on the far right end (Back, Forward, Reload)
+            // Navigation Controls on the far right end (Back, Forward, Reload, Bookmark, Settings)
             if let activeTab = store.activeTab {
-                NavigationControls(tab: activeTab)
+                NavigationControls(tab: activeTab, store: store, settings: settings)
                     .id(activeTab.id)
                     .padding(.trailing, 14)
             }

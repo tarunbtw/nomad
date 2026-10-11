@@ -22,9 +22,12 @@ enum URLParser {
 
         let lower = trimmed.lowercased()
 
-        // Direct internal settings page (nomad://settings only)
+        // Direct internal schemes (nomad://settings and nomad://tune)
         if lower == "settings" || lower == "nomad://settings" {
             return URL(string: "nomad://settings")!
+        }
+        if lower == "tune" || lower == "nomad://tune" {
+            return URL(string: "nomad://tune")!
         }
 
         // If it starts with a recognized scheme (including nomad://), use it directly

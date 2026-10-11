@@ -109,6 +109,18 @@ final class BrowserStore: ObservableObject {
         }
     }
 
+    /// Opens or switches to the tune internal page (nomad://tune).
+    func openTune() {
+        let tuneURL = URL(string: "nomad://tune")!
+        if let current = activeTab, current.isBlank {
+            current.load(url: tuneURL)
+        } else if let existing = tabs.first(where: { $0.url == tuneURL }) {
+            selectTab(id: existing.id)
+        } else {
+            newTab(url: tuneURL, select: true)
+        }
+    }
+
     /// Opens a bookmark in the current or new tab.
     func openBookmark(_ bookmark: Bookmark) {
         if let destination = URL(string: bookmark.url) {

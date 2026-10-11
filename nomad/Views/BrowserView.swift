@@ -62,6 +62,21 @@ struct BrowserView: View {
                     .keyboardShortcut("}", modifiers: .command)
                 Button("") { store.openSettings() }
                     .keyboardShortcut(",", modifiers: .command)
+                Button("") {
+                    if let tab = store.activeTab,
+                       let urlString = tab.url?.absoluteString,
+                       !tab.isBlank, !tab.isInternalPage, !urlString.isEmpty, urlString != "about:blank" {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            if settings.isBookmarked(urlString) {
+                                settings.removeBookmark(url: urlString)
+                            } else {
+                                let title = tab.title.isEmpty ? (tab.url?.host ?? urlString) : tab.title
+                                settings.addBookmark(title: title, url: urlString)
+                            }
+                        }
+                    }
+                }
+                .keyboardShortcut("d", modifiers: .command)
             }
             .opacity(0)
             .allowsHitTesting(false)
@@ -78,9 +93,15 @@ private struct TabStageView: View {
     var body: some View {
         ZStack {
             if tab.isInternalPage {
-                SettingsView(store: store, settings: settings)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.opacity)
+                if tab.url?.host == "tune" {
+                    TuneView(store: store, settings: settings)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
+                } else {
+                    SettingsView(store: store, settings: settings)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
+                }
             } else if tab.isBlank {
                 // Calm empty start state when tab has no URL loaded
                 EmptyStateView(tab: tab, store: store, settings: settings)
@@ -176,20 +197,20 @@ private struct EmptyStateView: View {
                 }
             }
 
-            // Bottom-right Customize / Settings icon button
+            // Bottom-right Customize / Tune Canvas icon button
             VStack {
                 Spacer()
                 HStack {
                     Spacer()
-                    Button(action: { store.openSettings() }) {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 14, weight: .medium))
+                    Button(action: { store.openTune() }) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(.secondary)
                             .padding(10)
                             .background(Color.primary.opacity(0.05), in: Circle())
                     }
                     .buttonStyle(.plain)
-                    .help("Customize & Settings (⌘,)")
+                    .help("Tune (nomad://tune)")
                     .padding(20)
                 }
             }

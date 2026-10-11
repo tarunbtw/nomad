@@ -8,11 +8,7 @@
 import WebKit
 
 /// Manages WebKit resources, configurations, and extension-readiness.
-/// Uses a shared WKProcessPool so new tabs warm up instantly.
 enum WebKitPool {
-    /// Shared process pool across all web views to avoid cold start latency.
-    static let sharedProcessPool = WKProcessPool()
-
     /// Standard user-agent matching the system Safari version to prevent Google CAPTCHAs and compatibility warnings.
     static let customUserAgent: String = {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
@@ -24,7 +20,6 @@ enum WebKitPool {
     /// Ready for WebExtensions (WKWebExtensionController) and custom user scripts.
     static func makeConfiguration() -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
-        config.processPool = sharedProcessPool
         
         // Enable modern web preferences
         let prefs = WKWebpagePreferences()

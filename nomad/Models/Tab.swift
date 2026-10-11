@@ -72,7 +72,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         if url.scheme == "nomad" {
             self.isBlank = false
             self.isLoading = false
-            self.title = "Settings"
+            self.title = (url.host == "tune") ? "Tune" : "Settings"
             return
         }
 
