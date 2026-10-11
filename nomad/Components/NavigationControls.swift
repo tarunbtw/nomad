@@ -12,6 +12,7 @@ struct NavigationControls: View {
     @ObservedObject var tab: Tab
     @ObservedObject var store: BrowserStore
     @ObservedObject var settings: SettingsStore = SettingsStore.shared
+    @State private var isShowingExtensionsMenu: Bool = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -51,6 +52,26 @@ struct NavigationControls: View {
             }
             .buttonStyle(.plain)
             .help(tab.isLoading ? "Stop Loading" : "Reload (⌘R)")
+
+            // 1-Click Chrome Web Store install button when visiting an extension page
+            WebStoreInstallPill(tab: tab, store: store)
+
+            // Pinned WebExtension action buttons (e.g. uBlock Origin Lite)
+            ExtensionActionBar(store: store)
+
+            // Extensions Menu button (Puzzle icon)
+            Button(action: { isShowingExtensionsMenu.toggle() }) {
+                Image(systemName: "puzzlepiece.extension")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(isShowingExtensionsMenu ? settings.accentColor : Color.primary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Extensions")
+            .popover(isPresented: $isShowingExtensionsMenu, arrowEdge: .bottom) {
+                ExtensionsMenuPopover(tab: tab, store: store, isPresented: $isShowingExtensionsMenu)
+            }
 
             let urlString = tab.url?.absoluteString ?? ""
             let canBookmark = !tab.isBlank && !tab.isInternalPage && !urlString.isEmpty && urlString != "about:blank"

@@ -24,6 +24,34 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     @Published var isBlank: Bool = true
     @Published var favicon: NSImage? = nil
 
+    /// Detects if this tab is on a Chrome Web Store extension detail page and extracts the 32-letter ID.
+    var chromeWebStoreExtensionId: String? {
+        guard let url = url,
+              let host = url.host,
+              host.contains("chromewebstore.google.com") || host.contains("chrome.google.com"),
+              url.path.contains("/detail/") else {
+            return nil
+        }
+        return CrxDownloader.extractID(from: url.absoluteString)
+    }
+
+    /// Clean display title for the extension detected on this tab.
+    var chromeWebStoreExtensionName: String? {
+        guard chromeWebStoreExtensionId != nil else { return nil }
+        if !title.isEmpty && title != "Chrome Web Store" {
+            let clean = title.replacingOccurrences(of: " - Chrome Web Store", with: "")
+                             .replacingOccurrences(of: " - Chrome web store", with: "")
+            if !clean.isEmpty { return clean }
+        }
+        if let pathComponents = url?.pathComponents, pathComponents.count >= 3 {
+            let slug = pathComponents[pathComponents.count - 2]
+            if slug != "detail" {
+                return slug.replacingOccurrences(of: "-", with: " ").capitalized
+            }
+        }
+        return "Extension"
+    }
+
     // MARK: - Fluid Two-Finger Swipe Navigation State
     enum SwipeDirection {
         case back
@@ -192,6 +220,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, !self.isInternalPage else { return }
                 self.title = newTitle.isEmpty ? (self.url?.host ?? "New Tab") : newTitle
+                ExtensionManager.shared.tabDidChange(self, properties: [.title])
             }
         })
 
@@ -205,6 +234,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
                 if let newURL = newURL {
                     self.fetchFavicon(for: newURL)
                 }
+                ExtensionManager.shared.tabDidChange(self, properties: [.URL])
             }
         })
 
@@ -212,7 +242,9 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             guard let self else { return }
             let loading = wv.isLoading
             Task { @MainActor [weak self] in
-                self?.isLoading = loading
+                guard let self else { return }
+                self.isLoading = loading
+                ExtensionManager.shared.tabDidChange(self, properties: [.loading])
             }
         })
 

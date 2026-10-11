@@ -15,8 +15,15 @@ struct SettingsView: View {
     @ObservedObject var store: BrowserStore
     @ObservedObject var settings: SettingsStore
 
-    @State private var selectedSection: Section = .bookmarks
+    private var selectedSection: Section {
+        get { Section(rawValue: settings.activeSection) ?? .bookmarks }
+        nonmutating set { settings.activeSection = newValue.rawValue }
+    }
     @State private var importStatusMessage: String? = nil
+    @ObservedObject private var extensionManager = ExtensionManager.shared
+    @State private var webStoreInput: String = ""
+    @State private var extensionErrorMessage: String? = nil
+    @State private var isInstallingExtension: Bool = false
 
     enum Section: String, CaseIterable, Identifiable {
         case bookmarks = "Bookmarks"
@@ -265,18 +272,205 @@ struct SettingsView: View {
     // MARK: - Extensions Section
     private var extensionsSection: some View {
         VStack(alignment: .leading, spacing: 24) {
-            header(title: "Extensions", subtitle: "WebExtensions runtime and developer unpacked extensions.")
+            header(title: "Extensions", subtitle: "Install Chrome Web Store extensions or load unpacked developer extensions.")
 
-            card(title: "Extension Runtime") {
+            // Add from Chrome Web Store Card
+            card(title: "Add from Chrome Web Store") {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
-                        Circle().fill(Color.green).frame(width: 8, height: 8)
-                        Text("WebKit Extensions Engine: Configured")
-                            .font(.system(size: 13, weight: .medium))
+                        TextField("Paste Chrome Web Store URL or 32-letter ID", text: $webStoreInput)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                            .onSubmit { installFromWebStore() }
+
+                        Button(action: { installFromWebStore() }) {
+                            if isInstallingExtension {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(width: 60)
+                            } else {
+                                Text("Install")
+                                    .frame(width: 60)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isInstallingExtension || webStoreInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                        Button("Open Store") {
+                            let storeURL = URL(string: "https://chromewebstore.google.com")!
+                            store.newTab(url: storeURL, select: true)
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    Text("Nomad's WebKit architecture uses shared process pools and user content controllers. Support for loading unpacked extensions from disk is wired for the upcoming milestone.")
+
+                    if let errorMessage = extensionErrorMessage {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.red)
+                            Text(errorMessage)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.red)
+                        }
+                    } else {
+                        Text("Supports Chrome extensions built with Manifest V2 and V3, running directly on WebKit.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // Developer Mode / Unpacked Card
+            card(title: "Developer Mode (Unpacked)") {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Load Unpacked Extension")
+                            .font(.system(size: 12, weight: .medium))
+                        Text("Select a local directory containing manifest.json for testing and development.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Choose Folder…") {
+                        loadUnpackedFolder()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            // Installed Extensions List Card
+            card(title: "Installed Extensions (\(extensionManager.installed.count))") {
+                if extensionManager.installed.isEmpty {
+                    Text("No extensions installed yet. Paste a link from the Chrome Web Store above or load a local folder.")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                        .padding(.vertical, 8)
+                } else {
+                    VStack(spacing: 12) {
+                        ForEach(extensionManager.installed) { ext in
+                            HStack(spacing: 12) {
+                                Image(systemName: "puzzlepiece.extension")
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(ext.enabled ? Color.accentColor : Color.secondary)
+                                    .frame(width: 28, height: 28)
+                                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 6) {
+                                        Text(ext.name)
+                                            .font(.system(size: 13, weight: .semibold))
+                                        Text("v\(ext.version)")
+                                            .font(.system(size: 10, weight: .medium))
+                                            .foregroundStyle(.secondary)
+                                        if !ext.fromStore {
+                                            Text("Unpacked")
+                                                .font(.system(size: 9, weight: .semibold))
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 1)
+                                                .background(Color.orange.opacity(0.15), in: Capsule())
+                                                .foregroundStyle(.orange)
+                                        }
+                                    }
+
+                                    if !ext.permissions.isEmpty {
+                                        Text(ext.permissions.prefix(4).joined(separator: " • "))
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                }
+
+                                Spacer()
+
+                                if ext.optionsPath != nil {
+                                    Button(action: {
+                                        extensionManager.openOptionsPage(for: ext.id)
+                                    }) {
+                                        Image(systemName: "gearshape")
+                                            .font(.system(size: 12))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Extension Options")
+                                }
+
+                                Button(action: {
+                                    extensionManager.togglePinned(id: ext.id)
+                                }) {
+                                    Image(systemName: ext.pinned ? "pin.fill" : "pin")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(ext.pinned ? Color.accentColor : Color.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help(ext.pinned ? "Unpin from Toolbar" : "Pin to Toolbar")
+
+                                Toggle("", isOn: Binding(
+                                    get: { ext.enabled },
+                                    set: { _ in extensionManager.toggleEnabled(id: ext.id) }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+
+                                Button(action: {
+                                    extensionManager.remove(id: ext.id)
+                                }) {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.red.opacity(0.8))
+                                }
+                                .buttonStyle(.plain)
+                                .help("Remove Extension")
+                            }
+                            .padding(.vertical, 6)
+
+                            if ext.id != extensionManager.installed.last?.id {
+                                Divider().opacity(0.1)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func installFromWebStore() {
+        let input = webStoreInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty else { return }
+        isInstallingExtension = true
+        extensionErrorMessage = nil
+        Task {
+            do {
+                try await extensionManager.installFromWebStore(idOrURL: input)
+                webStoreInput = ""
+                isInstallingExtension = false
+            } catch {
+                extensionErrorMessage = error.localizedDescription
+                isInstallingExtension = false
+            }
+        }
+    }
+
+    private func loadUnpackedFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Select Unpacked Extension Folder"
+        panel.message = "Choose a directory containing manifest.json"
+        panel.prompt = "Load"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+
+        if panel.runModal() == .OK, let folderURL = panel.url {
+            isInstallingExtension = true
+            extensionErrorMessage = nil
+            Task {
+                do {
+                    try await extensionManager.installUnpacked(folderURL: folderURL)
+                    isInstallingExtension = false
+                } catch {
+                    extensionErrorMessage = error.localizedDescription
+                    isInstallingExtension = false
                 }
             }
         }

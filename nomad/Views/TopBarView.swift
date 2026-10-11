@@ -23,7 +23,7 @@ struct TopBarView: View {
             TabStripView(store: store)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Navigation Controls on the far right end (Back, Forward, Reload, Bookmark, Settings)
+            // Navigation Controls on the far right end (Back, Forward, Reload, Extensions, Bookmark, Settings)
             if let activeTab = store.activeTab {
                 NavigationControls(tab: activeTab, store: store, settings: settings)
                     .padding(.trailing, 14)

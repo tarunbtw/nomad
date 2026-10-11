@@ -24,6 +24,7 @@ final class BrowserStore: ObservableObject {
         // Start with an initial blank tab
         let initialTab = newTab(url: nil, select: true)
         _ = initialTab
+        ExtensionManager.shared.start(with: self)
     }
 
     /// Creates and appends a new tab.
@@ -50,6 +51,7 @@ final class BrowserStore: ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         
         let isClosingActive = (activeTabId == id)
+        ExtensionManager.shared.removeAdapter(for: id)
         withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
             tabs.remove(at: index)
             
@@ -119,11 +121,14 @@ final class BrowserStore: ObservableObject {
     }
 
     /// Opens or switches to the settings internal page (nomad://settings).
-    func openSettings() {
+    func openSettings(section: String? = nil) {
+        if let section = section {
+            SettingsStore.shared.activeSection = section
+        }
         let settingsURL = URL(string: "nomad://settings")!
         if let current = activeTab, current.isBlank {
             current.load(url: settingsURL)
-        } else if let existing = tabs.first(where: { $0.url == settingsURL }) {
+        } else if let existing = tabs.first(where: { $0.url?.host == "settings" }) {
             selectTab(id: existing.id)
         } else {
             newTab(url: settingsURL, select: true)
