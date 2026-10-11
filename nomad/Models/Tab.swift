@@ -36,8 +36,10 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         self.title = "New Tab"
         
         let config = WebKitPool.makeConfiguration()
-        self.webView = WKWebView(frame: .zero, configuration: config)
+        self.webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1180, height: 730), configuration: config)
         self.webView.customUserAgent = WebKitPool.customUserAgent
+        self.webView.allowsBackForwardNavigationGestures = true
+        self.webView.allowsMagnification = true
         
         super.init()
         

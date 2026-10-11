@@ -112,9 +112,6 @@ private struct TabStageView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .animation(.easeInOut(duration: 0.15), value: tab.isBlank)
-        .animation(.easeInOut(duration: 0.15), value: tab.isInternalPage)
     }
 }
 

@@ -14,7 +14,8 @@ struct WebStage: NSViewRepresentable {
     let tab: Tab?
 
     func makeNSView(context: Context) -> StageHostView {
-        StageHostView()
+        let view = StageHostView()
+        return view
     }
 
     func updateNSView(_ hostView: StageHostView, context: Context) {
@@ -22,39 +23,56 @@ struct WebStage: NSViewRepresentable {
     }
 }
 
-/// AppKit container view that manages the active WKWebView subview.
+/// AppKit container view that manages the active WKWebView subview with 1:1 pixel fidelity.
 final class StageHostView: NSView {
     private weak var activeView: NSView?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
+        setup()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
     }
 
     override func layout() {
         super.layout()
-        activeView?.frame = bounds
+        if let active = activeView, active.frame != bounds {
+            active.frame = bounds
+        }
     }
 
     func show(_ newView: NSView?) {
-        guard activeView !== newView else { return }
+        guard activeView !== newView else {
+            if let active = activeView, active.frame != bounds {
+                active.frame = bounds
+            }
+            return
+        }
 
         // Remove currently displayed web view without destroying it
         activeView?.removeFromSuperview()
         activeView = newView
 
-        // Mount the newly active web view
+        // Mount the newly active web view with exact bounds matching
         if let newView = newView {
-            newView.frame = bounds
-            newView.autoresizingMask = [.width, .height]
+            newView.translatesAutoresizingMaskIntoConstraints = false
             addSubview(newView)
+            NSLayoutConstraint.activate([
+                newView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                newView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                newView.topAnchor.constraint(equalTo: topAnchor),
+                newView.bottomAnchor.constraint(equalTo: bottomAnchor)
+            ])
+            newView.needsLayout = true
         }
+        needsLayout = true
     }
 }

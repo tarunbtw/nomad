@@ -30,7 +30,33 @@ enum WebKitPool {
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         
         // User content controller for script message handlers and future extensions
-        config.userContentController = WKUserContentController()
+        let ucc = WKUserContentController()
+        
+        // Ensure avatars on GitHub always render as perfect 1:1 circles
+        let githubAvatarFix = """
+        (function() {
+            if (location.hostname.includes('github.com')) {
+                const s = document.createElement('style');
+                s.id = 'nomad-avatar-fix';
+                s.textContent = `
+                    .avatar-user, .user-profile-mini-avatar img, img.avatar {
+                        aspect-ratio: 1 / 1 !important;
+                        border-radius: 50% !important;
+                        object-fit: cover !important;
+                    }
+                `;
+                if (document.head) {
+                    document.head.appendChild(s);
+                } else {
+                    document.addEventListener('DOMContentLoaded', () => document.head.appendChild(s));
+                }
+            }
+        })();
+        """
+        let userScript = WKUserScript(source: githubAvatarFix, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        ucc.addUserScript(userScript)
+        
+        config.userContentController = ucc
 
         return config
     }
