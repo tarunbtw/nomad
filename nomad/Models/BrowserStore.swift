@@ -81,10 +81,10 @@ final class BrowserStore: ObservableObject {
               tabs.indices.contains(sourceIndex),
               tabs.indices.contains(destinationIndex) else { return }
         
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-            let tab = tabs.remove(at: sourceIndex)
-            tabs.insert(tab, at: destinationIndex)
-        }
+        var updated = tabs
+        let tab = updated.remove(at: sourceIndex)
+        updated.insert(tab, at: destinationIndex)
+        tabs = updated
     }
 
     /// Selects the previous tab (⌘{ or Ctrl+Shift+Tab)

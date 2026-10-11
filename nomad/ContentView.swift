@@ -33,6 +33,8 @@ private struct WindowConfigurator: NSViewRepresentable {
             guard let window = window else { return }
             window.isMovable = false
             window.isMovableByWindowBackground = false
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
         }
     }
 }

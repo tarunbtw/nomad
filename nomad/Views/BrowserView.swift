@@ -394,6 +394,7 @@ final class ConfigNSView: NSView {
 
     private func apply() {
         guard let window = window else { return }
+        window.titlebarAppearsTransparent = true
         if isVibrant {
             window.isOpaque = false
             window.backgroundColor = .clear

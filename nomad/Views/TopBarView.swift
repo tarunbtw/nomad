@@ -26,14 +26,13 @@ struct TopBarView: View {
             // Navigation Controls on the far right end (Back, Forward, Reload, Bookmark, Settings)
             if let activeTab = store.activeTab {
                 NavigationControls(tab: activeTab, store: store, settings: settings)
-                    .id(activeTab.id)
                     .padding(.trailing, 14)
             }
         }
         .frame(height: 50)
         .background {
             if settings.isVibrant {
-                Color(nsColor: .windowBackgroundColor).opacity(0.35)
+                Color.clear
             } else {
                 Color(nsColor: .windowBackgroundColor)
             }

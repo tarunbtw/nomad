@@ -15,10 +15,14 @@ struct TabItemView: View {
     @ObservedObject var store: BrowserStore
     @ObservedObject var tab: Tab
     let isActive: Bool
+    let isDragging: Bool
     let tabWidth: CGFloat
     let index: Int
     let count: Int
     let step: CGFloat
+    let offsetX: CGFloat
+    let onDragChanged: (CGFloat) -> Void
+    let onDragEnded: (CGFloat) -> Void
 
     @State private var isHovered: Bool = false
     @State private var isEditing: Bool = false
@@ -26,13 +30,7 @@ struct TabItemView: View {
     @State private var lastClickTime: TimeInterval = 0
     @FocusState private var isFieldFocused: Bool
 
-    // Search drag physics state
-    @State private var held: Bool = false
-    @State private var from: Int = 0
-    @State private var travel: CGFloat = 0
-
     var body: some View {
-        let shift = held ? travel - CGFloat(index - from) * step : 0
 
         HStack(spacing: 0) {
             if isEditing {
@@ -133,34 +131,18 @@ struct TabItemView: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: 7))
         .onHover { isHovered = $0 }
-        .offset(x: shift, y: 0)
-        .transaction { if held { $0.animation = nil } }
-        .zIndex(held ? 100 : (isActive ? 1 : 0))
-        .shadow(color: .black.opacity(held ? 0.16 : 0), radius: 10, y: 3)
-        .scaleEffect(held ? 1.02 : 1.0)
+        .offset(x: offsetX, y: 0)
+        .zIndex(isDragging ? 100 : (isActive ? 1 : 0))
+        .shadow(color: .black.opacity(isDragging ? 0.16 : 0), radius: 8, y: 2)
+        .scaleEffect(isDragging ? 1.02 : 1.0)
         .gesture(
             isEditing ? nil :
             DragGesture(minimumDistance: 2, coordinateSpace: .named("TabStripSpace"))
                 .onChanged { value in
-                    if !held {
-                        held = true
-                        from = index
-                    }
-                    travel = value.translation.width
-                    let target = min(max(0, from + Int((travel / step).rounded())), count - 1)
-                    if target != index {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                            store.moveTab(from: index, to: target)
-                        }
-                        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
-                    }
+                    onDragChanged(value.translation.width)
                 }
-                .onEnded { _ in
-                    store.selectTab(id: tab.id)
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.82)) {
-                        held = false
-                        travel = 0
-                    }
+                .onEnded { value in
+                    onDragEnded(value.translation.width)
                 }
         )
         .onTapGesture {
