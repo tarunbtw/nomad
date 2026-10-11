@@ -26,15 +26,16 @@ final class DragNSView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if let window = window {
-            Lights.keep(window)
-            
-            // Ensure window opens with the exact 1180x780 default dimensions of the Search app
-            if !Self.didApplyInitialSize {
-                Self.didApplyInitialSize = true
-                window.setContentSize(NSSize(width: 1180, height: 780))
-                window.center()
-            }
+        guard let window = window else { return }
+        Lights.keep(window)
+        
+        window.isMovableByWindowBackground = false
+        window.isMovable = false
+        
+        if !Self.didApplyInitialSize {
+            Self.didApplyInitialSize = true
+            window.setContentSize(NSSize(width: 1180, height: 780))
+            window.center()
         }
     }
 
@@ -50,11 +51,14 @@ final class DragNSView: NSView {
         let dy = event.locationInWindow.y - pressed.locationInWindow.y
         if abs(dx) < 3 && abs(dy) < 3 { return }
         moved = true
+        window.isMovable = true
         window.performDrag(with: pressed)
+        window.isMovable = false
     }
 
     override func mouseUp(with event: NSEvent) {
         super.mouseUp(with: event)
+        window?.isMovable = false
         guard let window = window, !moved, event.clickCount == 2 else { return }
         window.zoom(nil)
     }

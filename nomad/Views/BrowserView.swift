@@ -18,10 +18,11 @@ struct BrowserView: View {
             // Top browser chrome (includes bottom progress bar overlay)
             TopBarView(store: store, settings: settings)
 
-            // Tab Stage (observes activeTab directly so isBlank/isInternalPage changes trigger immediate redraws)
+            // Tab Stage (observes activeTab directly with silky crossfade animation)
             if let activeTab = store.activeTab {
                 TabStageView(store: store, tab: activeTab, settings: settings)
                     .id(activeTab.id)
+                    .transition(.opacity.animation(.easeInOut(duration: 0.18)))
             } else {
                 Color.clear
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

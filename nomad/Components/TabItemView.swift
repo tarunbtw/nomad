@@ -10,11 +10,15 @@ import AppKit
 
 /// An individual tab pill in the tab bar.
 /// Double-clicking expands the tab pill into an inline URL/search field.
-/// Clicking anywhere outside the expanded field dismisses it back to the normal tab pill.
+/// Immediate sliding tab drag on any tab (active or inactive) without moving the window.
 struct TabItemView: View {
     @ObservedObject var store: BrowserStore
     @ObservedObject var tab: Tab
     let isActive: Bool
+    let tabWidth: CGFloat
+    let index: Int
+    let count: Int
+    let step: CGFloat
 
     @State private var isHovered: Bool = false
     @State private var isEditing: Bool = false
@@ -22,82 +26,103 @@ struct TabItemView: View {
     @State private var lastClickTime: TimeInterval = 0
     @FocusState private var isFieldFocused: Bool
 
+    // Search drag physics state
+    @State private var held: Bool = false
+    @State private var from: Int = 0
+    @State private var travel: CGFloat = 0
+
     var body: some View {
-        HStack(spacing: 6) {
+        let shift = held ? travel - CGFloat(index - from) * step : 0
+
+        HStack(spacing: 0) {
             if isEditing {
                 // Expanded URL Editing Mode
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 2)
-
-                TextField("Enter a web address", text: $editText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 11, weight: .regular))
-                    .focused($isFieldFocused)
-                    .onSubmit {
-                        submitEdit()
-                    }
-                    .onExitCommand {
-                        cancelEdit()
-                    }
-
-                Button(action: { cancelEdit() }) {
-                    Image(systemName: "xmark.circle.fill")
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
                         .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-            } else {
-                // Clickable Tab Area (Icon + Title)
-                Button(action: handleTabTap) {
-                    HStack(spacing: 6) {
-                        if tab.isLoading {
-                            ProgressView()
-                                .controlSize(.mini)
-                                .scaleEffect(0.65)
-                                .frame(width: 14, height: 14)
-                        } else {
-                            Image(systemName: iconName)
-                                .font(.system(size: 10, weight: .regular))
-                                .foregroundStyle(isActive ? .primary : .secondary)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 6)
+
+                    TextField("Enter a web address", text: $editText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11, weight: .regular))
+                        .focused($isFieldFocused)
+                        .onSubmit {
+                            submitEdit()
+                        }
+                        .onExitCommand {
+                            cancelEdit()
                         }
 
-                        // Tab Title / Host
-                        Text(displayTitle)
-                            .font(.system(size: 11, weight: isActive ? .medium : .regular))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .foregroundStyle(isActive ? .primary : .secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                // Close button (visible when hovered or active)
-                if isHovered || isActive {
-                    Button(action: {
-                        store.closeTab(id: tab.id)
-                    }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 16, height: 16)
-                            .contentShape(Rectangle())
+                    Button(action: { cancelEdit() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
-                    .help("Close Tab (⌘W)")
-                } else {
-                    Spacer().frame(width: 16)
+                    .padding(.trailing, 6)
+                }
+            } else {
+                // Standard Tab Pill Content
+                HStack(spacing: 0) {
+                    if tabWidth < 50 {
+                        // Compact favicon-only mode (Close button when hovered)
+                        ZStack {
+                            if isHovered {
+                                Button(action: { store.closeTab(id: tab.id) }) {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 18, height: 18)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .help("Close Tab (⌘W)")
+                            } else {
+                                tabIconView
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        // Standard & Medium width mode
+                        HStack(spacing: 6) {
+                            tabIconView
+
+                            if tabWidth >= 70 {
+                                Text(displayTitle)
+                                    .font(.system(size: 11, weight: isActive ? .medium : .regular))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .foregroundStyle(isActive ? .primary : .secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(.leading, 8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: tabWidth < 70 ? .center : .leading)
+
+                        // Close button on trailing edge
+                        if isHovered || isActive {
+                            Button(action: {
+                                store.closeTab(id: tab.id)
+                            }) {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 16, height: 16)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, 6)
+                            .help("Close Tab (⌘W)")
+                        } else if tabWidth >= 70 {
+                            Spacer().frame(width: 14)
+                        }
+                    }
                 }
             }
         }
-        .padding(.horizontal, 9)
         .frame(height: 30)
-        .frame(minWidth: isEditing ? 240 : 100, maxWidth: isEditing ? 420 : 200)
-        .animation(.spring(response: 0.22, dampingFraction: 0.8), value: isEditing)
+        .frame(width: isEditing ? max(tabWidth, 280) : tabWidth)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(isActive ? Color.primary.opacity(0.08) : (isHovered ? Color.primary.opacity(0.04) : Color.clear))
@@ -106,7 +131,48 @@ struct TabItemView: View {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(isEditing ? Color.accentColor.opacity(0.5) : (isActive ? Color.primary.opacity(0.06) : Color.clear), lineWidth: 1)
         )
-        // Detects clicks outside the tab pill while editing and cancels editing immediately
+        .contentShape(RoundedRectangle(cornerRadius: 7))
+        .onHover { isHovered = $0 }
+        .offset(x: shift, y: 0)
+        .transaction { if held { $0.animation = nil } }
+        .zIndex(held ? 100 : (isActive ? 1 : 0))
+        .shadow(color: .black.opacity(held ? 0.16 : 0), radius: 10, y: 3)
+        .scaleEffect(held ? 1.02 : 1.0)
+        .gesture(
+            isEditing ? nil :
+            DragGesture(minimumDistance: 2, coordinateSpace: .named("TabStripSpace"))
+                .onChanged { value in
+                    if !held {
+                        held = true
+                        from = index
+                    }
+                    travel = value.translation.width
+                    let target = min(max(0, from + Int((travel / step).rounded())), count - 1)
+                    if target != index {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                            store.moveTab(from: index, to: target)
+                        }
+                        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                    }
+                }
+                .onEnded { _ in
+                    store.selectTab(id: tab.id)
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.82)) {
+                        held = false
+                        travel = 0
+                    }
+                }
+        )
+        .onTapGesture {
+            guard !isEditing else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastClickTime < 0.35 {
+                startEditing()
+            } else {
+                store.selectTab(id: tab.id)
+            }
+            lastClickTime = now
+        }
         .background {
             if isEditing {
                 ClickOutsideDetector {
@@ -114,8 +180,6 @@ struct TabItemView: View {
                 }
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: 7))
-        .onHover { isHovered = $0 }
         .onChange(of: isActive) { _, active in
             if !active && isEditing {
                 cancelEdit()
@@ -129,9 +193,31 @@ struct TabItemView: View {
         }
     }
 
+    @ViewBuilder
+    private var tabIconView: some View {
+        if tab.isLoading {
+            ProgressView()
+                .controlSize(.mini)
+                .scaleEffect(0.65)
+                .frame(width: 14, height: 14)
+        } else if let favicon = tab.favicon {
+            Image(nsImage: favicon)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 14, height: 14)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+        } else {
+            Image(systemName: iconName)
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(isActive ? .primary : .secondary)
+                .frame(width: 14, height: 14)
+        }
+    }
+
     private var iconName: String {
         if tab.isInternalPage {
-            return "gearshape.fill"
+            return (tab.url?.host == "tune") ? "slider.horizontal.3" : "gearshape.fill"
         }
         return tab.isBlank ? "sparkles" : "globe"
     }
@@ -144,17 +230,6 @@ struct TabItemView: View {
             return host
         }
         return tab.title
-    }
-
-    private func handleTabTap() {
-        guard !isEditing else { return }
-        let now = ProcessInfo.processInfo.systemUptime
-        if now - lastClickTime < 0.35 {
-            startEditing()
-        } else {
-            store.selectTab(id: tab.id)
-        }
-        lastClickTime = now
     }
 
     private func startEditing() {

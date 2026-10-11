@@ -22,6 +22,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     @Published var canGoBack: Bool = false
     @Published var canGoForward: Bool = false
     @Published var isBlank: Bool = true
+    @Published var favicon: NSImage? = nil
 
     // MARK: - Fluid Two-Finger Swipe Navigation State
     enum SwipeDirection {
@@ -130,9 +131,11 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         }
 
         self.isBlank = (url.absoluteString == "about:blank")
+        self.favicon = nil
         webView.setMagnification(1.0, centeredAt: .zero)
         let request = URLRequest(url: url)
         webView.load(request)
+        fetchFavicon(for: url)
     }
 
     func goBack() {
@@ -199,6 +202,9 @@ final class Tab: NSObject, Identifiable, ObservableObject {
                 guard let self, !self.isInternalPage else { return }
                 self.url = newURL
                 self.isBlank = (newURL == nil || newURL?.absoluteString == "about:blank")
+                if let newURL = newURL {
+                    self.fetchFavicon(for: newURL)
+                }
             }
         })
 
@@ -234,6 +240,27 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             }
         })
     }
+    // MARK: - Favicon Fetching
+    func fetchFavicon(for url: URL) {
+        guard url.scheme == "http" || url.scheme == "https", let host = url.host, !host.isEmpty else {
+            self.favicon = nil
+            return
+        }
+
+        if let cached = FaviconService.shared.cachedFavicon(for: host) {
+            self.favicon = cached
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let image = await FaviconService.shared.loadFavicon(for: url) {
+                if self.url?.host == host || self.webView.url?.host == host {
+                    self.favicon = image
+                }
+            }
+        }
+    }
 }
 
 // MARK: - WKNavigationDelegate & WKUIDelegate
@@ -242,6 +269,26 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
         self.isLoading = false
         if webView.magnification != 1.0 {
             webView.setMagnification(1.0, centeredAt: .zero)
+        }
+        if let currentURL = webView.url {
+            fetchFavicon(for: currentURL)
+
+            let js = "document.querySelector(\"link[rel~='icon'], link[rel='shortcut icon']\")?.href || \"\""
+            webView.evaluateJavaScript(js) { [weak self] result, _ in
+                guard let self = self,
+                      let hrefString = result as? String,
+                      !hrefString.isEmpty,
+                      let iconURL = URL(string: hrefString),
+                      let host = currentURL.host else { return }
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    if let image = await FaviconService.shared.loadFavicon(fromDirectURL: iconURL, host: host) {
+                        if self.url?.host == host || self.webView.url?.host == host {
+                            self.favicon = image
+                        }
+                    }
+                }
+            }
         }
     }
 

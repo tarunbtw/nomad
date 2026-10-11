@@ -17,14 +17,10 @@ struct TopBarView: View {
         HStack(spacing: 0) {
             // Traffic lights safe area: window dragging and traffic lights alignment
             WindowDragArea()
-                .frame(width: 96, height: 50)
+                .frame(width: 80, height: 50)
 
-            // Tab Strip (tabs + new tab '+' button) - zero drag layer interference
+            // Flexible dynamic tab strip filling space up to navigation controls
             TabStripView(store: store)
-                .frame(maxWidth: 700, alignment: .leading)
-
-            // Middle empty area: native window dragging and double-click to zoom
-            WindowDragArea()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // Navigation Controls on the far right end (Back, Forward, Reload, Bookmark, Settings)

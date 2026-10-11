@@ -35,38 +35,55 @@ final class BrowserStore: ObservableObject {
             self?.newTab(url: targetURL, select: true)
         }
         
-        tabs.append(tab)
-        
-        if select {
-            activeTabId = tab.id
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+            tabs.append(tab)
+            if select {
+                activeTabId = tab.id
+            }
         }
         
         return tab
     }
 
-    /// Closes the specified tab.
+    /// Closes the specified tab with smooth spring removal.
     func closeTab(id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         
         let isClosingActive = (activeTabId == id)
-        tabs.remove(at: index)
-        
-        // If the closed tab was active, choose an adjacent tab
-        if isClosingActive {
-            if tabs.isEmpty {
-                // Keep at least one tab open
-                newTab(url: nil, select: true)
-            } else {
-                let nextIndex = min(index, tabs.count - 1)
-                activeTabId = tabs[nextIndex].id
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+            tabs.remove(at: index)
+            
+            // If the closed tab was active, choose an adjacent tab
+            if isClosingActive {
+                if tabs.isEmpty {
+                    // Keep at least one tab open
+                    newTab(url: nil, select: true)
+                } else {
+                    let nextIndex = min(index, tabs.count - 1)
+                    activeTabId = tabs[nextIndex].id
+                }
             }
         }
     }
 
-    /// Selects a tab by ID.
+    /// Selects a tab by ID with smooth content transition.
     func selectTab(id: UUID) {
-        if tabs.contains(where: { $0.id == id }) {
-            activeTabId = id
+        if tabs.contains(where: { $0.id == id }), activeTabId != id {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                activeTabId = id
+            }
+        }
+    }
+
+    /// Reorders a tab from one index to another with animated sliding.
+    func moveTab(from sourceIndex: Int, to destinationIndex: Int) {
+        guard sourceIndex != destinationIndex,
+              tabs.indices.contains(sourceIndex),
+              tabs.indices.contains(destinationIndex) else { return }
+        
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+            let tab = tabs.remove(at: sourceIndex)
+            tabs.insert(tab, at: destinationIndex)
         }
     }
 
@@ -74,14 +91,18 @@ final class BrowserStore: ObservableObject {
     func selectPreviousTab() {
         guard let currentId = activeTabId, let currentIndex = tabs.firstIndex(where: { $0.id == currentId }) else { return }
         let prevIndex = (currentIndex - 1 + tabs.count) % tabs.count
-        activeTabId = tabs[prevIndex].id
+        withAnimation(.easeInOut(duration: 0.18)) {
+            activeTabId = tabs[prevIndex].id
+        }
     }
 
     /// Selects the next tab (⌘} or Ctrl+Tab)
     func selectNextTab() {
         guard let currentId = activeTabId, let currentIndex = tabs.firstIndex(where: { $0.id == currentId }) else { return }
         let nextIndex = (currentIndex + 1) % tabs.count
-        activeTabId = tabs[nextIndex].id
+        withAnimation(.easeInOut(duration: 0.18)) {
+            activeTabId = tabs[nextIndex].id
+        }
     }
 
     // MARK: - Navigation convenience forwards
