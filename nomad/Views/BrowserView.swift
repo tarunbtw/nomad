@@ -77,6 +77,15 @@ struct BrowserView: View {
                     }
                 }
                 .keyboardShortcut("d", modifiers: .command)
+                // Browser Page Zoom Shortcuts (⌘+, ⌘-, ⌘0)
+                Button("") { store.activeTab?.zoomIn() }
+                    .keyboardShortcut("+", modifiers: .command)
+                Button("") { store.activeTab?.zoomIn() }
+                    .keyboardShortcut("=", modifiers: .command)
+                Button("") { store.activeTab?.zoomOut() }
+                    .keyboardShortcut("-", modifiers: .command)
+                Button("") { store.activeTab?.resetZoom() }
+                    .keyboardShortcut("0", modifiers: .command)
             }
             .opacity(0)
             .allowsHitTesting(false)
@@ -110,8 +119,72 @@ private struct TabStageView: View {
                 WebStage(tab: tab)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+
+            // Chrome/Arc-style Floating Swipe Gesture Indicator
+            if let swipe = tab.swipeState {
+                SwipeIndicatorView(swipe: swipe, accentColor: settings.accentColor)
+                    .transition(.opacity)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Sleek floating swipe gesture navigation indicator (inspired by Chrome and Arc).
+private struct SwipeIndicatorView: View {
+    let swipe: Tab.SwipeGestureState
+    let accentColor: Color
+
+    var body: some View {
+        HStack {
+            if swipe.direction == .forward {
+                Spacer()
+            }
+
+            ZStack {
+                Circle()
+                    .fill(Color(nsColor: .windowBackgroundColor).opacity(0.88))
+                    .frame(width: 44, height: 44)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(swipe.isTriggered ? accentColor.opacity(0.85) : Color.primary.opacity(0.12), lineWidth: swipe.isTriggered ? 2 : 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.18), radius: 8, x: 0, y: 3)
+
+                Image(systemName: swipe.direction == .back ? "chevron.left" : "chevron.right")
+                    .font(.system(size: 15, weight: swipe.isTriggered ? .bold : .semibold))
+                    .foregroundStyle(swipe.isTriggered ? accentColor : Color.primary)
+                    .scaleEffect(swipe.isTriggered ? 1.15 : 1.0)
+            }
+            .offset(x: swipeOffset)
+            .scaleEffect(swipeScale)
+            .opacity(swipeOpacity)
+            .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.78), value: swipe.distance)
+            .animation(.easeInOut(duration: 0.15), value: swipe.isTriggered)
+
+            if swipe.direction == .back {
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
+    }
+
+    private var swipeOffset: CGFloat {
+        let maxTravel: CGFloat = 32
+        let travel = min(swipe.distance * 0.45, maxTravel)
+        return swipe.direction == .back ? travel : -travel
+    }
+
+    private var swipeScale: CGFloat {
+        let minScale: CGFloat = 0.8
+        let scale = minScale + (min(swipe.progress, 1.0) * 0.2)
+        return swipe.isTriggered ? scale * 1.08 : scale
+    }
+
+    private var swipeOpacity: Double {
+        return Double(min(swipe.progress * 1.4, 1.0))
     }
 }
 

@@ -63,6 +63,9 @@ final class StageHostView: NSView {
 
         // Mount the newly active web view with exact bounds matching
         if let newView = newView {
+            if let wv = newView as? WKWebView, wv.magnification != 1.0 {
+                wv.setMagnification(1.0, centeredAt: .zero)
+            }
             newView.translatesAutoresizingMaskIntoConstraints = false
             addSubview(newView)
             NSLayoutConstraint.activate([

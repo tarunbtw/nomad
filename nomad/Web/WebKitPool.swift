@@ -21,9 +21,10 @@ enum WebKitPool {
     static func makeConfiguration() -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
         
-        // Enable modern web preferences
+        // Enable modern web preferences with full desktop mode
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
+        prefs.preferredContentMode = .desktop
         config.defaultWebpagePreferences = prefs
         
         // Developer extras for Web Inspector
@@ -32,28 +33,33 @@ enum WebKitPool {
         // User content controller for script message handlers and future extensions
         let ucc = WKUserContentController()
         
-        // Ensure avatars on GitHub always render as perfect 1:1 circles
-        let githubAvatarFix = """
+        // Suppress horizontal elastic overscroll bounce and ensure GitHub avatars render as 1:1 circles
+        let globalFixes = """
         (function() {
-            if (location.hostname.includes('github.com')) {
-                const s = document.createElement('style');
-                s.id = 'nomad-avatar-fix';
-                s.textContent = `
-                    .avatar-user, .user-profile-mini-avatar img, img.avatar {
-                        aspect-ratio: 1 / 1 !important;
-                        border-radius: 50% !important;
-                        object-fit: cover !important;
-                    }
-                `;
-                if (document.head) {
-                    document.head.appendChild(s);
-                } else {
-                    document.addEventListener('DOMContentLoaded', () => document.head.appendChild(s));
+            const s = document.createElement('style');
+            s.id = 'nomad-viewport-fixes';
+            s.textContent = `
+                html, body {
+                    overscroll-behavior-x: none !important;
                 }
+                .avatar-user, .user-profile-mini-avatar img, img.avatar {
+                    aspect-ratio: 1 / 1 !important;
+                    border-radius: 50% !important;
+                    object-fit: cover !important;
+                }
+            `;
+            if (document.head) {
+                document.head.appendChild(s);
+            } else {
+                document.addEventListener('DOMContentLoaded', () => {
+                    if (document.head && !document.getElementById('nomad-viewport-fixes')) {
+                        document.head.appendChild(s);
+                    }
+                });
             }
         })();
         """
-        let userScript = WKUserScript(source: githubAvatarFix, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        let userScript = WKUserScript(source: globalFixes, injectionTime: .atDocumentStart, forMainFrameOnly: false)
         ucc.addUserScript(userScript)
         
         config.userContentController = ucc
