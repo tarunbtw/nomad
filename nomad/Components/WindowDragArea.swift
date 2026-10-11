@@ -20,6 +20,7 @@ struct WindowDragArea: NSViewRepresentable {
 final class DragNSView: NSView {
     private var pressed: NSEvent?
     private var moved = false
+    private static var didApplyInitialSize = false
 
     override var mouseDownCanMoveWindow: Bool { false }
 
@@ -27,6 +28,13 @@ final class DragNSView: NSView {
         super.viewDidMoveToWindow()
         if let window = window {
             Lights.keep(window)
+            
+            // Ensure window opens with the exact 1180x780 default dimensions of the Search app
+            if !Self.didApplyInitialSize {
+                Self.didApplyInitialSize = true
+                window.setContentSize(NSSize(width: 1180, height: 780))
+                window.center()
+            }
         }
     }
 

@@ -10,7 +10,7 @@ import SwiftUI
 @main
 struct nomadApp: App {
     var body: some Scene {
-        WindowGroup {
+        Window("Nomad", id: "main") {
             ContentView()
         }
         .windowStyle(.hiddenTitleBar)

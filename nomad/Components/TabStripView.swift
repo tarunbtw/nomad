@@ -8,6 +8,7 @@
 import SwiftUI
 
 /// Horizontal tab strip housing all open tabs and the new tab button.
+/// Hugs its content so the rest of the top bar remains interactive for window dragging and zooming.
 struct TabStripView: View {
     @ObservedObject var store: BrowserStore
 
@@ -31,7 +32,8 @@ struct TabStripView: View {
                 .buttonStyle(.plain)
                 .help("New Tab (⌘T)")
             }
-            .padding(.trailing, 8)
+            .padding(.trailing, 6)
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 }

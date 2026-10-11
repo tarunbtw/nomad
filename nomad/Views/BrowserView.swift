@@ -13,13 +13,8 @@ struct BrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Top browser chrome
+            // Top browser chrome (includes bottom progress bar overlay)
             TopBarView(store: store)
-
-            // Progress bar directly below the top chrome
-            if let activeTab = store.activeTab {
-                ProgressBarView(tab: activeTab)
-            }
 
             // Tab Stage (observes activeTab directly so isBlank changes trigger immediate redraws)
             if let activeTab = store.activeTab {

@@ -8,40 +8,48 @@
 import SwiftUI
 
 /// Top browser chrome housing traffic lights spacer, tab strip, and trailing navigation controls.
+/// Seamlessly blends into the window canvas with zero bottom margin or divider lines.
 struct TopBarView: View {
     @ObservedObject var store: BrowserStore
 
     var body: some View {
         ZStack {
-            // Allows dragging the macOS window and double-click to zoom
+            // Native AppKit layer for dragging and double-click to zoom
             WindowDragArea()
 
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    // Traffic lights safe area: leaves even margins on both sides of the window controls
-                    Color.clear
-                        .frame(width: 96, height: 50)
+            HStack(spacing: 0) {
+                // Traffic lights safe area: leaves even margins on both sides of the window controls
+                Color.clear
+                    .frame(width: 96, height: 50)
 
-                    // Tab Strip (tabs + new tab '+' button)
-                    TabStripView(store: store)
+                // Tab Strip (tabs + new tab '+' button)
+                TabStripView(store: store)
+                    .frame(maxWidth: 700, alignment: .leading)
 
-                    Spacer(minLength: 20)
-
-                    // Navigation Controls on the far right end (Back, Forward, Reload)
-                    if let activeTab = store.activeTab {
-                        NavigationControls(tab: activeTab)
-                            .id(activeTab.id)
-                            .padding(.trailing, 14)
+                // Middle empty area: double-click to zoom across the entire middle
+                Spacer()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        NSApp.keyWindow?.zoom(nil)
                     }
-                }
-                .frame(height: 50)
 
-                // Subtle hairline border separating top chrome from web stage
-                Divider()
-                    .opacity(0.3)
+                // Navigation Controls on the far right end (Back, Forward, Reload)
+                if let activeTab = store.activeTab {
+                    NavigationControls(tab: activeTab)
+                        .id(activeTab.id)
+                        .padding(.trailing, 14)
+                }
             }
+            .frame(height: 50)
         }
         .frame(height: 50)
         .background(Color(nsColor: .windowBackgroundColor))
+        .overlay(alignment: .bottom) {
+            // Non-intrusive progress bar that overlays the bottom edge without adding margins
+            if let activeTab = store.activeTab {
+                ProgressBarView(tab: activeTab)
+            }
+        }
     }
 }
