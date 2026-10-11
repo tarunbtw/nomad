@@ -19,6 +19,7 @@ struct TabItemView: View {
     @State private var isHovered: Bool = false
     @State private var isEditing: Bool = false
     @State private var editText: String = ""
+    @State private var lastClickTime: TimeInterval = 0
     @FocusState private var isFieldFocused: Bool
 
     var body: some View {
@@ -48,25 +49,32 @@ struct TabItemView: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                // Normal Tab Pill Mode
-                if tab.isLoading {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .scaleEffect(0.65)
-                        .frame(width: 14, height: 14)
-                } else {
-                    Image(systemName: tab.isBlank ? "sparkles" : "globe")
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(isActive ? .primary : .secondary)
-                }
+                // Clickable Tab Area (Icon + Title)
+                Button(action: handleTabTap) {
+                    HStack(spacing: 6) {
+                        if tab.isLoading {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .scaleEffect(0.65)
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Image(systemName: iconName)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(isActive ? .primary : .secondary)
+                        }
 
-                // Tab Title / Host
-                Text(displayTitle)
-                    .font(.system(size: 11, weight: isActive ? .medium : .regular))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .foregroundStyle(isActive ? .primary : .secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                        // Tab Title / Host
+                        Text(displayTitle)
+                            .font(.system(size: 11, weight: isActive ? .medium : .regular))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .foregroundStyle(isActive ? .primary : .secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
 
                 // Close button (visible when hovered or active)
                 if isHovered || isActive {
@@ -108,16 +116,6 @@ struct TabItemView: View {
         }
         .contentShape(RoundedRectangle(cornerRadius: 7))
         .onHover { isHovered = $0 }
-        .onTapGesture(count: 2) {
-            startEditing()
-        }
-        .simultaneousGesture(
-            TapGesture(count: 1).onEnded {
-                if !isEditing {
-                    store.selectTab(id: tab.id)
-                }
-            }
-        )
         .onChange(of: isActive) { _, active in
             if !active && isEditing {
                 cancelEdit()
@@ -131,11 +129,32 @@ struct TabItemView: View {
         }
     }
 
+    private var iconName: String {
+        if tab.isInternalPage {
+            return "gearshape.fill"
+        }
+        return tab.isBlank ? "sparkles" : "globe"
+    }
+
     private var displayTitle: String {
+        if tab.isInternalPage {
+            return tab.title
+        }
         if let host = tab.url?.host, !tab.isBlank {
             return host
         }
         return tab.title
+    }
+
+    private func handleTabTap() {
+        guard !isEditing else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastClickTime < 0.35 {
+            startEditing()
+        } else {
+            store.selectTab(id: tab.id)
+        }
+        lastClickTime = now
     }
 
     private func startEditing() {

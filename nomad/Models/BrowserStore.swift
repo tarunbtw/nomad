@@ -96,4 +96,27 @@ final class BrowserStore: ObservableObject {
     func reload() {
         activeTab?.reload()
     }
+
+    /// Opens or switches to the settings internal page (nomad://settings).
+    func openSettings() {
+        let settingsURL = URL(string: "nomad://settings")!
+        if let current = activeTab, current.isBlank {
+            current.load(url: settingsURL)
+        } else if let existing = tabs.first(where: { $0.url == settingsURL }) {
+            selectTab(id: existing.id)
+        } else {
+            newTab(url: settingsURL, select: true)
+        }
+    }
+
+    /// Opens a bookmark in the current or new tab.
+    func openBookmark(_ bookmark: Bookmark) {
+        if let destination = URL(string: bookmark.url) {
+            if let current = activeTab, current.isBlank {
+                current.load(url: destination)
+            } else {
+                newTab(url: destination, select: true)
+            }
+        }
+    }
 }

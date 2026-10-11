@@ -39,6 +39,7 @@ final class DragNSView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
         pressed = event
         moved = false
     }
@@ -53,6 +54,7 @@ final class DragNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
         guard let window = window, !moved, event.clickCount == 2 else { return }
         window.zoom(nil)
     }

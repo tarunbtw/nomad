@@ -11,40 +11,37 @@ import SwiftUI
 /// Seamlessly blends into the window canvas with zero bottom margin or divider lines.
 struct TopBarView: View {
     @ObservedObject var store: BrowserStore
+    @ObservedObject var settings: SettingsStore
 
     var body: some View {
-        ZStack {
-            // Native AppKit layer for dragging and double-click to zoom
+        HStack(spacing: 0) {
+            // Traffic lights safe area: window dragging and traffic lights alignment
             WindowDragArea()
+                .frame(width: 96, height: 50)
 
-            HStack(spacing: 0) {
-                // Traffic lights safe area: leaves even margins on both sides of the window controls
-                Color.clear
-                    .frame(width: 96, height: 50)
+            // Tab Strip (tabs + new tab '+' button) - zero drag layer interference
+            TabStripView(store: store)
+                .frame(maxWidth: 700, alignment: .leading)
 
-                // Tab Strip (tabs + new tab '+' button)
-                TabStripView(store: store)
-                    .frame(maxWidth: 700, alignment: .leading)
+            // Middle empty area: native window dragging and double-click to zoom
+            WindowDragArea()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                // Middle empty area: double-click to zoom across the entire middle
-                Spacer()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        NSApp.keyWindow?.zoom(nil)
-                    }
-
-                // Navigation Controls on the far right end (Back, Forward, Reload)
-                if let activeTab = store.activeTab {
-                    NavigationControls(tab: activeTab)
-                        .id(activeTab.id)
-                        .padding(.trailing, 14)
-                }
+            // Navigation Controls on the far right end (Back, Forward, Reload)
+            if let activeTab = store.activeTab {
+                NavigationControls(tab: activeTab)
+                    .id(activeTab.id)
+                    .padding(.trailing, 14)
             }
-            .frame(height: 50)
         }
         .frame(height: 50)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background {
+            if settings.isVibrant {
+                Color(nsColor: .windowBackgroundColor).opacity(0.35)
+            } else {
+                Color(nsColor: .windowBackgroundColor)
+            }
+        }
         .overlay(alignment: .bottom) {
             // Non-intrusive progress bar that overlays the bottom edge without adding margins
             if let activeTab = store.activeTab {

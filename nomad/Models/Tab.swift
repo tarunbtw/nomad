@@ -56,6 +56,10 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         observers.removeAll()
     }
 
+    var isInternalPage: Bool {
+        url?.scheme == "nomad"
+    }
+
     /// Loads a user-typed string (resolved via URLParser).
     func load(text: String) {
         let destination = URLParser.parse(text)
@@ -65,6 +69,13 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     /// Loads a specific URL.
     func load(url: URL) {
         self.url = url
+        if url.scheme == "nomad" {
+            self.isBlank = false
+            self.isLoading = false
+            self.title = "Settings"
+            return
+        }
+
         self.isBlank = (url.absoluteString == "about:blank")
         let request = URLRequest(url: url)
         webView.load(request)
@@ -83,6 +94,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     }
 
     func reload() {
+        if isInternalPage { return }
         webView.reload()
     }
 
@@ -93,40 +105,53 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     // MARK: - KVO Observers
     private func setupObservers() {
         observers.append(webView.observe(\.title, options: [.new]) { [weak self] wv, _ in
-            Task { @MainActor in
-                let newTitle = wv.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                self?.title = newTitle.isEmpty ? (self?.url?.host ?? "New Tab") : newTitle
+            guard let self else { return }
+            let newTitle = wv.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            Task { @MainActor [weak self] in
+                guard let self, !self.isInternalPage else { return }
+                self.title = newTitle.isEmpty ? (self.url?.host ?? "New Tab") : newTitle
             }
         })
 
         observers.append(webView.observe(\.url, options: [.new]) { [weak self] wv, _ in
-            Task { @MainActor in
-                self?.url = wv.url
-                self?.isBlank = (wv.url == nil || wv.url?.absoluteString == "about:blank")
+            guard let self else { return }
+            let newURL = wv.url
+            Task { @MainActor [weak self] in
+                guard let self, !self.isInternalPage else { return }
+                self.url = newURL
+                self.isBlank = (newURL == nil || newURL?.absoluteString == "about:blank")
             }
         })
 
         observers.append(webView.observe(\.isLoading, options: [.new]) { [weak self] wv, _ in
-            Task { @MainActor in
-                self?.isLoading = wv.isLoading
+            guard let self else { return }
+            let loading = wv.isLoading
+            Task { @MainActor [weak self] in
+                self?.isLoading = loading
             }
         })
 
         observers.append(webView.observe(\.estimatedProgress, options: [.new]) { [weak self] wv, _ in
-            Task { @MainActor in
-                self?.estimatedProgress = wv.estimatedProgress
+            guard let self else { return }
+            let progress = wv.estimatedProgress
+            Task { @MainActor [weak self] in
+                self?.estimatedProgress = progress
             }
         })
 
         observers.append(webView.observe(\.canGoBack, options: [.new]) { [weak self] wv, _ in
-            Task { @MainActor in
-                self?.canGoBack = wv.canGoBack
+            guard let self else { return }
+            let canBack = wv.canGoBack
+            Task { @MainActor [weak self] in
+                self?.canGoBack = canBack
             }
         })
 
         observers.append(webView.observe(\.canGoForward, options: [.new]) { [weak self] wv, _ in
-            Task { @MainActor in
-                self?.canGoForward = wv.canGoForward
+            guard let self else { return }
+            let canForward = wv.canGoForward
+            Task { @MainActor [weak self] in
+                self?.canGoForward = canForward
             }
         })
     }

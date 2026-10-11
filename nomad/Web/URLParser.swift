@@ -8,19 +8,26 @@
 import Foundation
 
 /// Resolves user input into a navigable URL.
-/// Converts valid addresses to URLs and falls back to a clean search query.
+/// Handles standard web domains, internal nomad:// schemes, and fallback search queries.
 enum URLParser {
-    private static let supportedSchemes: Set<String> = ["http", "https", "file", "about", "data"]
-    private static let searchEngineURL = "https://duckduckgo.com/?q="
+    private static let supportedSchemes: Set<String> = ["http", "https", "file", "about", "data", "nomad"]
 
     /// Parses user-typed text into a destination URL.
+    @MainActor
     static func parse(_ input: String) -> URL {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return URL(string: "about:blank")!
         }
 
-        // If it already starts with a recognized scheme, use it directly
+        let lower = trimmed.lowercased()
+
+        // Direct internal settings page (nomad://settings only)
+        if lower == "settings" || lower == "nomad://settings" {
+            return URL(string: "nomad://settings")!
+        }
+
+        // If it starts with a recognized scheme (including nomad://), use it directly
         if let schemeRange = trimmed.range(of: "://") {
             let scheme = String(trimmed[..<schemeRange.lowerBound]).lowercased()
             if supportedSchemes.contains(scheme), let url = URL(string: trimmed) {
@@ -29,7 +36,7 @@ enum URLParser {
         }
 
         // Handle about: or data: prefixes
-        if trimmed.lowercased().hasPrefix("about:") || trimmed.lowercased().hasPrefix("data:") {
+        if lower.hasPrefix("about:") || lower.hasPrefix("data:") {
             if let url = URL(string: trimmed) { return url }
         }
 
@@ -41,9 +48,10 @@ enum URLParser {
             }
         }
 
-        // Otherwise, treat as a search query
+        // Otherwise, treat as a search query using the configured search engine
         let encodedQuery = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed
-        return URL(string: "\(searchEngineURL)\(encodedQuery)")!
+        let searchBase = SettingsStore.shared.searchEngineBaseURL
+        return URL(string: "\(searchBase)\(encodedQuery)")!
     }
 
     /// Checks if a string looks like a web address or domain name rather than search keywords.
