@@ -43,6 +43,11 @@ final class BrowserStore: ObservableObject {
             }
         }
         
+        ExtensionManager.shared.didOpenTab(tab)
+        if select {
+            ExtensionManager.shared.didActivateTab(tab)
+        }
+        
         return tab
     }
 
@@ -51,7 +56,7 @@ final class BrowserStore: ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         
         let isClosingActive = (activeTabId == id)
-        ExtensionManager.shared.removeAdapter(for: id)
+        ExtensionManager.shared.didCloseTab(id: id)
         withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
             tabs.remove(at: index)
             
@@ -73,6 +78,9 @@ final class BrowserStore: ObservableObject {
         if tabs.contains(where: { $0.id == id }), activeTabId != id {
             withAnimation(.easeInOut(duration: 0.18)) {
                 activeTabId = id
+            }
+            if let tab = tabs.first(where: { $0.id == id }) {
+                ExtensionManager.shared.didActivateTab(tab)
             }
         }
     }

@@ -45,7 +45,14 @@ final class ExtensionManager: NSObject, ObservableObject {
     }
 
     private var adapters: [UUID: ExtensionTab] = [:]
+    var anchors: [String: WeakView] = [:]
     lazy var currentWindow: ExtensionWindow = ExtensionWindow(manager: self)
+
+    /// Finds the NSView anchor for an extension's button, falling back to the puzzle menu anchor.
+    func anchor(for id: String) -> NSView? {
+        let own = anchors[id]?.view
+        return own?.window != nil ? own : anchors["extensions_menu_anchor"]?.view
+    }
 
     private override init() {
         WKWebExtension.MatchPattern.registerCustomURLScheme(ExtensionManager.scheme)
@@ -76,6 +83,23 @@ final class ExtensionManager: NSObject, ObservableObject {
         adapters.removeValue(forKey: tabId)
     }
 
+    func didOpenTab(_ tab: Tab) {
+        let tabAdapter = adapter(for: tab)
+        controller.didOpenTab(tabAdapter)
+    }
+
+    func didCloseTab(id: UUID) {
+        if let existing = adapters[id] {
+            controller.didCloseTab(existing, windowIsClosing: false)
+            adapters.removeValue(forKey: id)
+        }
+    }
+
+    func didActivateTab(_ tab: Tab) {
+        let tabAdapter = adapter(for: tab)
+        controller.didActivateTab(tabAdapter, previousActiveTab: nil)
+    }
+
     /// Notifies the extension controller that tab properties (URL, title, loading) changed.
     func tabDidChange(_ tab: Tab, properties: WKWebExtension.TabChangedProperties) {
         if let adapter = adapters[tab.id] {
@@ -100,20 +124,22 @@ final class ExtensionManager: NSObject, ObservableObject {
         let folder = ExtensionManager.extensionsFolder.appendingPathComponent(item.id, isDirectory: true)
         guard FileManager.default.fileExists(atPath: folder.path) else { return false }
 
+        // Inject Nomad Chrome API polyfills/shims before WebKit reads the package
+        try? await Task.detached(priority: .userInitiated) {
+            try ExtensionShims.prepare(folder)
+        }.value
+
         do {
             let extensionObj = try await WKWebExtension(resourceBaseURL: folder)
             let context = WKWebExtensionContext(for: extensionObj)
             context.uniqueIdentifier = item.id
-
-            if let baseURL = URL(string: "\(ExtensionManager.scheme)://\(item.id)/") {
-                context.baseURL = baseURL
-            }
             context.isInspectable = true
 
             // Automatically grant requested permissions approved during installation
             for permission in extensionObj.requestedPermissions {
                 context.setPermissionStatus(.grantedExplicitly, for: permission)
             }
+            context.setPermissionStatus(.grantedExplicitly, for: .nativeMessaging)
             for pattern in extensionObj.requestedPermissionMatchPatterns {
                 context.setPermissionStatus(.grantedExplicitly, for: pattern)
             }
@@ -131,6 +157,8 @@ final class ExtensionManager: NSObject, ObservableObject {
     /// Unloads an extension from WebKit.
     func unload(id: String) {
         guard let context = contexts[id] else { return }
+        ExtensionPopup.shared.close()
+        ExtensionOffscreen.close(for: id)
         try? controller.unload(context)
         contexts.removeValue(forKey: id)
         actionsChanged += 1
@@ -207,10 +235,38 @@ final class ExtensionManager: NSObject, ObservableObject {
 
     /// Opens an extension's options page in a new browser tab.
     func openOptionsPage(for id: String) {
-        guard let ext = installed.first(where: { $0.id == id }),
-              let optionsPath = ext.optionsPath,
-              let url = URL(string: "\(ExtensionManager.scheme)://\(id)/\(optionsPath)") else { return }
-        store?.newTab(url: url, select: true)
+        guard let context = contexts[id] else { return }
+        if let url = context.optionsPageURL {
+            store?.newTab(url: url, select: true)
+        } else if let ext = installed.first(where: { $0.id == id }),
+                  let optionsPath = ext.optionsPath,
+                  let url = URL(string: optionsPath, relativeTo: context.baseURL) {
+            store?.newTab(url: url, select: true)
+        }
+    }
+
+    /// Activates an extension: opens its popup or fires its action.
+    func activate(_ id: String) {
+        guard let context = contexts[id] else { return }
+        if ExtensionPopup.shared.closes(id) { return }
+
+        let activeAdapter = store?.activeTab.flatMap { adapter(for: $0) }
+        let action = context.action(for: activeAdapter)
+
+        if action?.presentsPopup == true, let url = ExtensionManager.popupURL(for: context) {
+            ExtensionPopup.shared.show(url, for: context, from: anchor(for: id))
+            return
+        }
+
+        context.performAction(for: activeAdapter)
+    }
+
+    /// Resolves the declared popup URL for an extension's action.
+    static func popupURL(for context: WKWebExtensionContext) -> URL? {
+        let manifest = context.webExtension.manifest
+        let action = (manifest["action"] ?? manifest["browser_action"]) as? [String: Any]
+        guard let path = action?["default_popup"] as? String, !path.isEmpty else { return nil }
+        return URL(string: path, relativeTo: context.baseURL)?.absoluteURL
     }
 
     // MARK: - Persistence
@@ -230,6 +286,15 @@ final class ExtensionManager: NSObject, ObservableObject {
     }
 }
 
+/// A weak reference to an NSView for anchor positioning.
+@MainActor
+final class WeakView {
+    weak var view: NSView?
+    init(_ view: NSView) {
+        self.view = view
+    }
+}
+
 // MARK: - WKWebExtensionControllerDelegate
 extension ExtensionManager: WKWebExtensionControllerDelegate {
     func webExtensionController(_ controller: WKWebExtensionController, openWindowsFor extensionContext: WKWebExtensionContext) -> [any WKWebExtensionWindow] {
@@ -243,8 +308,55 @@ extension ExtensionManager: WKWebExtensionControllerDelegate {
     func webExtensionController(_ controller: WKWebExtensionController, openNewTabUsing configuration: WKWebExtension.TabConfiguration, for extensionContext: WKWebExtensionContext) async throws -> (any WKWebExtensionTab)? {
         guard let store else { return nil }
         let url = configuration.url ?? URL(string: "about:blank")!
-        store.newTab(url: url, select: configuration.shouldBeActive)
-        guard let newTab = store.tabs.last else { return nil }
+        let newTab = store.newTab(url: url, select: configuration.shouldBeActive)
         return adapter(for: newTab)
+    }
+
+    func webExtensionController(_ controller: WKWebExtensionController, openNewWindowUsing configuration: WKWebExtension.WindowConfiguration, for extensionContext: WKWebExtensionContext) async throws -> (any WKWebExtensionWindow)? {
+        guard let store else { return nil }
+        let urls = configuration.tabURLs
+        let targetURLs = urls.isEmpty ? [URL(string: "about:blank")!] : urls
+        for (idx, targetURL) in targetURLs.enumerated() {
+            store.newTab(url: targetURL, select: idx == 0)
+        }
+        return currentWindow
+    }
+
+    func webExtensionController(
+        _ controller: WKWebExtensionController,
+        presentActionPopup action: WKWebExtension.Action,
+        for extensionContext: WKWebExtensionContext,
+        completionHandler: @escaping (Error?) -> Void
+    ) {
+        let url = action.popupWebView?.url ?? ExtensionManager.popupURL(for: extensionContext)
+        action.closePopup()
+        if let url {
+            ExtensionPopup.shared.show(url, for: extensionContext, from: anchor(for: extensionContext.uniqueIdentifier))
+        }
+        completionHandler(nil)
+    }
+
+    func webExtensionController(
+        _ controller: WKWebExtensionController,
+        sendMessage message: Any,
+        toApplicationWithIdentifier applicationIdentifier: String?,
+        for extensionContext: WKWebExtensionContext
+    ) async throws -> Any? {
+        let target = applicationIdentifier ?? ExtensionShims.application
+        if target == ExtensionShims.application || target.hasPrefix("search") || target.hasPrefix("nomad") {
+            return try await ExtensionShims.answer(message, from: extensionContext, manager: self)
+        }
+        return nil
+    }
+
+    func webExtensionController(
+        _ controller: WKWebExtensionController,
+        connectUsing port: WKWebExtension.MessagePort,
+        for extensionContext: WKWebExtensionContext
+    ) async throws {
+        let app = port.applicationIdentifier ?? ""
+        if app == ExtensionShims.application || app.hasPrefix("search") || app.hasPrefix("nomad") {
+            return
+        }
     }
 }

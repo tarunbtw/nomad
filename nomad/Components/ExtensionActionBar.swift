@@ -8,7 +8,7 @@
 import SwiftUI
 import WebKit
 
-/// Toolbar bar displaying pinned WebExtension action buttons with dynamic badges and popovers.
+/// Toolbar bar displaying pinned WebExtension action buttons with dynamic badges and native popovers.
 struct ExtensionActionBar: View {
     @ObservedObject var manager = ExtensionManager.shared
     @ObservedObject var store: BrowserStore
@@ -27,13 +27,13 @@ struct ExtensionActionBar: View {
     }
 }
 
-/// An individual extension icon button with action badge, click popover, and context menu.
+/// An individual extension icon button with action badge, native WebKit popover, and context menu.
 struct ExtensionActionButton: View {
     let extensionItem: InstalledExtension
     @ObservedObject var manager: ExtensionManager
     @ObservedObject var store: BrowserStore
 
-    @State private var isShowingPopup: Bool = false
+    @State private var anchorView: NSView? = nil
     @State private var isHovered: Bool = false
 
     var body: some View {
@@ -43,11 +43,7 @@ struct ExtensionActionButton: View {
         let badgeColor = Color.accentColor
 
         Button(action: {
-            if let popupPath = extensionItem.popupPath, !popupPath.isEmpty {
-                isShowingPopup.toggle()
-            } else if let context {
-                context.performAction(for: nil)
-            }
+            manager.activate(extensionItem.id)
         }) {
             ZStack(alignment: .bottomTrailing) {
                 if let context, let nsImage = context.action(for: nil)?.icon(for: CGSize(width: 16, height: 16)) {
@@ -81,19 +77,11 @@ struct ExtensionActionButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .background(ExtensionAnchor(id: extensionItem.id))
         .onHover { isHovered = $0 }
         .help(action?.label ?? extensionItem.name)
-        .popover(isPresented: $isShowingPopup, arrowEdge: .bottom) {
-            if let popupPath = extensionItem.popupPath {
-                ExtensionPopupHostView(
-                    extensionId: extensionItem.id,
-                    popupPath: popupPath,
-                    isPresented: $isShowingPopup
-                )
-            }
-        }
         .contextMenu {
-            if extensionItem.optionsPath != nil {
+            if extensionItem.optionsPath != nil || context?.optionsPageURL != nil {
                 Button("Options") {
                     manager.openOptionsPage(for: extensionItem.id)
                 }
@@ -112,34 +100,15 @@ struct ExtensionActionButton: View {
     }
 }
 
-/// Popover container hosting an extension's action popup HTML in a standalone WKWebView.
-struct ExtensionPopupHostView: View {
-    let extensionId: String
-    let popupPath: String
-    @Binding var isPresented: Bool
+/// A real view under the button so the extension popup hangs accurately from it.
+struct ExtensionAnchor: NSViewRepresentable {
+    let id: String
 
-    var body: some View {
-        ExtensionPopupRepresentable(extensionId: extensionId, popupPath: popupPath)
-            .frame(width: 360, height: 460)
-            .background(Color(nsColor: .windowBackgroundColor))
-    }
-}
-
-/// AppKit bridge for hosting an extension's popup WKWebView.
-struct ExtensionPopupRepresentable: NSViewRepresentable {
-    let extensionId: String
-    let popupPath: String
-
-    func makeNSView(context: Context) -> WKWebView {
-        let config = WebKitPool.makeConfiguration()
-        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 360, height: 460), configuration: config)
-        webView.customUserAgent = WebKitPool.customUserAgent
-
-        if let popupURL = URL(string: "\(ExtensionManager.scheme)://\(extensionId)/\(popupPath)") {
-            webView.load(URLRequest(url: popupURL))
-        }
-        return webView
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        ExtensionManager.shared.anchors[id] = WeakView(view)
+        return view
     }
 
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    func updateNSView(_ view: NSView, context: Context) {}
 }

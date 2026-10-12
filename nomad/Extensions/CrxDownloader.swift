@@ -102,6 +102,7 @@ enum CrxDownloader {
 
         let zipData = Data(bytes[(12 + headerSize)...])
         try unpackZip(zipData, into: destinationFolder)
+        try ExtensionShims.prepare(destinationFolder, fresh: true)
 
         let manifest = try parseManifest(at: destinationFolder)
         return InstalledExtension(
@@ -128,6 +129,7 @@ enum CrxDownloader {
         try? fm.removeItem(at: targetDir)
         try fm.createDirectory(at: targetDir.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fm.copyItem(at: folderURL, to: targetDir)
+        try ExtensionShims.prepare(targetDir, fresh: true)
 
         return InstalledExtension(
             id: id,

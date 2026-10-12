@@ -204,30 +204,39 @@ private struct ExtensionMenuRow: View {
         let action = context?.action(for: nil)
 
         HStack(spacing: 10) {
-            // Extension Icon
-            if let nsImage = action?.icon(for: CGSize(width: 16, height: 16)) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 16, height: 16)
-            } else {
-                Image(systemName: "puzzlepiece.extension")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .frame(width: 16, height: 16)
-            }
+            // Clickable area for triggering extension action / popup
+            Button(action: {
+                isPresented = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    manager.activate(ext.id)
+                }
+            }) {
+                HStack(spacing: 10) {
+                    if let nsImage = action?.icon(for: CGSize(width: 16, height: 16)) {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 16, height: 16)
+                    } else {
+                        Image(systemName: "puzzlepiece.extension")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.primary)
+                            .frame(width: 16, height: 16)
+                    }
 
-            // Name and Version
-            VStack(alignment: .leading, spacing: 1) {
-                Text(ext.name)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(ext.enabled ? Color.primary : Color.secondary)
-                    .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(ext.name)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(ext.enabled ? Color.primary : Color.secondary)
+                            .lineLimit(1)
 
-                Text("v\(ext.version)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                        Text("v\(ext.version)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
+            .buttonStyle(.plain)
 
             Spacer()
 

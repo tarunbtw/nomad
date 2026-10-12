@@ -68,6 +68,7 @@ struct NavigationControls: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .background(ExtensionAnchor(id: "extensions_menu_anchor"))
             .help("Extensions")
             .popover(isPresented: $isShowingExtensionsMenu, arrowEdge: .bottom) {
                 ExtensionsMenuPopover(tab: tab, store: store, isPresented: $isShowingExtensionsMenu)
