@@ -9,6 +9,65 @@ import SwiftUI
 import WebKit
 import Combine
 
+/// Lightweight console message entry captured from the page.
+struct ConsoleEntry: Identifiable, Sendable {
+    let id: UUID
+    let level: Level
+    let message: String
+    let timestamp: Date
+
+    enum Level: String, Codable, Sendable {
+        case log
+        case info
+        case warn
+        case error
+    }
+
+    init(id: UUID = UUID(), level: Level, message: String, timestamp: Date = Date()) {
+        self.id = id
+        self.level = level
+        self.message = message
+        self.timestamp = timestamp
+    }
+}
+
+/// Metadata describing an inspected live DOM node in the page.
+struct InspectedElementInfo: Sendable {
+    let selector: String
+    let tag: String
+    let idAttr: String
+    let classes: String
+    let text: String
+    let width: Int
+    let height: Int
+    let agentId: String?
+}
+
+/// Network request telemetry captured from client fetch / XHR.
+struct NetworkEntry: Identifiable, Sendable {
+    let id: UUID
+    let method: String
+    let url: String
+    let status: Int
+    let durationMs: Int
+    let timestamp: Date
+    let type: String
+    let error: String?
+
+    var isError: Bool { status >= 400 || status == 0 }
+
+    init(id: UUID = UUID(), method: String, url: String, status: Int, durationMs: Int, timestamp: Date = Date(), type: String = "fetch", error: String? = nil) {
+        self.id = id
+        self.method = method
+        self.url = url
+        self.status = status
+        self.durationMs = durationMs
+        self.timestamp = timestamp
+        self.type = type
+        self.error = error
+    }
+}
+
 /// Represents an individual browser tab.
 /// Owns its WKWebView instance so switching tabs is instant and preserves scroll state.
 @MainActor
@@ -24,6 +83,13 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     @Published var isBlank: Bool = true
     @Published var favicon: NSImage? = nil
     @Published var isIncognito: Bool = false
+
+    // MARK: - Developer Drawer & Live Inspection State
+    @Published var isDevDrawerVisible: Bool = false
+    @Published var isInspectorActive: Bool = false
+    @Published var consoleEntries: [ConsoleEntry] = []
+    @Published var networkEntries: [NetworkEntry] = []
+    @Published var inspectedElementInfo: InspectedElementInfo? = nil
 
     /// Detects if this tab is on a Chrome Web Store extension detail page and extracts the 32-letter ID.
     var chromeWebStoreExtensionId: String? {
@@ -108,6 +174,9 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         webView.allowsMagnification = false
         webView.setMagnification(1.0, centeredAt: .zero)
         webView.pageZoom = 1.0
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
         self.webView = webView
         
         super.init()
@@ -116,6 +185,14 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
         
+        let ucc = effectiveConfig.userContentController
+        ucc.removeScriptMessageHandler(forName: "nomadConsole")
+        ucc.removeScriptMessageHandler(forName: "nomadInspect")
+        ucc.removeScriptMessageHandler(forName: "nomadNetwork")
+        ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadConsole")
+        ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadInspect")
+        ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadNetwork")
+
         setupObservers()
         
         if let initialURL = initialURL {
@@ -166,6 +243,15 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         } else {
             cancelSwipeGesture()
         }
+    }
+
+    /// Tear down observers and script handlers when tab is explicitly closed
+    func cleanup() {
+        observers.forEach { $0.invalidate() }
+        observers.removeAll()
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "nomadConsole")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "nomadInspect")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "nomadNetwork")
     }
 
     deinit {
@@ -330,6 +416,177 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             printOperation.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
         } else {
             printOperation.run()
+        }
+    }
+
+    // MARK: - Developer Drawer & Live Inspection
+    func appendConsoleEntry(level: ConsoleEntry.Level, message: String) {
+        let entry = ConsoleEntry(level: level, message: message)
+        if consoleEntries.count > 600 {
+            consoleEntries.removeFirst(100)
+        }
+        consoleEntries.append(entry)
+    }
+
+    func startElementInspector() {
+        guard !isInternalPage && !isBlank else { return }
+        isInspectorActive = true
+        let script = """
+        (function() {
+            if (window.__nomad_inspector_active) return;
+            window.__nomad_inspector_active = true;
+            let overlay = document.getElementById('__nomad_inspect_overlay');
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = '__nomad_inspect_overlay';
+                overlay.style.position = 'fixed';
+                overlay.style.pointerEvents = 'none';
+                overlay.style.border = '2px solid #007aff';
+                overlay.style.backgroundColor = 'rgba(0, 122, 255, 0.15)';
+                overlay.style.zIndex = '2147483647';
+                overlay.style.transition = 'all 0.05s ease';
+                overlay.style.borderRadius = '3px';
+                document.body.appendChild(overlay);
+            }
+            overlay.style.display = 'none';
+
+            function onMouseMove(e) {
+                const el = document.elementFromPoint(e.clientX, e.clientY);
+                if (!el || el === overlay) return;
+                const rect = el.getBoundingClientRect();
+                overlay.style.left = rect.left + 'px';
+                overlay.style.top = rect.top + 'px';
+                overlay.style.width = rect.width + 'px';
+                overlay.style.height = rect.height + 'px';
+                overlay.style.display = 'block';
+            }
+
+            function cleanup() {
+                window.__nomad_inspector_active = false;
+                document.removeEventListener('mousemove', onMouseMove, true);
+                document.removeEventListener('click', onClick, true);
+                document.removeEventListener('keydown', onKeyDown, true);
+                if (overlay) overlay.style.display = 'none';
+            }
+
+            function onClick(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                const el = document.elementFromPoint(e.clientX, e.clientY);
+                if (el && el !== overlay) {
+                    const rect = el.getBoundingClientRect();
+                    let sel = el.tagName.toLowerCase();
+                    if (el.id) {
+                        sel += '#' + el.id;
+                    } else if (el.className && typeof el.className === 'string') {
+                        const cls = el.className.trim().split(/\\s+/).filter(Boolean).slice(0, 2).join('.');
+                        if (cls) sel += '.' + cls;
+                    }
+                    const info = {
+                        selector: sel,
+                        tag: el.tagName.toLowerCase(),
+                        idAttr: el.id || '',
+                        classes: typeof el.className === 'string' ? el.className.trim() : '',
+                        text: (el.innerText || el.textContent || '').trim().slice(0, 300),
+                        width: Math.round(rect.width),
+                        height: Math.round(rect.height),
+                        agentId: el.getAttribute('data-nomad-id') || null
+                    };
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nomadInspect) {
+                        window.webkit.messageHandlers.nomadInspect.postMessage(info);
+                    }
+                }
+                cleanup();
+            }
+
+            function onKeyDown(e) {
+                if (e.key === 'Escape') {
+                    cleanup();
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nomadInspect) {
+                        window.webkit.messageHandlers.nomadInspect.postMessage({ cancel: true });
+                    }
+                }
+            }
+
+            document.addEventListener('mousemove', onMouseMove, true);
+            document.addEventListener('click', onClick, true);
+            document.addEventListener('keydown', onKeyDown, true);
+        })();
+        """
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    func highlightInspectedElement() {
+        guard let selector = inspectedElementInfo?.selector, !selector.isEmpty else { return }
+        let escaped = selector.replacingOccurrences(of: "'", with: "\\'")
+        let script = """
+        (function() {
+            try {
+                const el = document.querySelector('\(escaped)');
+                if (!el) return;
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const prev = el.style.outline;
+                const prevTrans = el.style.transition;
+                el.style.transition = 'outline 0.15s ease';
+                el.style.outline = '3px solid #007aff';
+                setTimeout(() => {
+                    el.style.outline = prev;
+                    el.style.transition = prevTrans;
+                }, 1500);
+            } catch(e) {}
+        })();
+        """
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    func handleScriptMessage(name: String, body: Any) {
+        if name == "nomadConsole", let dict = body as? [String: Any] {
+            let lvlStr = dict["level"] as? String ?? "log"
+            let msg = dict["message"] as? String ?? ""
+            let level: ConsoleEntry.Level
+            switch lvlStr {
+            case "error": level = .error
+            case "warn": level = .warn
+            case "info": level = .info
+            default: level = .log
+            }
+            appendConsoleEntry(level: level, message: msg)
+        } else if name == "nomadInspect", let dict = body as? [String: Any] {
+            if dict["cancel"] as? Bool == true {
+                self.isInspectorActive = false
+                return
+            }
+            let selector = dict["selector"] as? String ?? ""
+            let tag = dict["tag"] as? String ?? ""
+            let idAttr = dict["idAttr"] as? String ?? ""
+            let classes = dict["classes"] as? String ?? ""
+            let text = dict["text"] as? String ?? ""
+            let width = dict["width"] as? Int ?? 0
+            let height = dict["height"] as? Int ?? 0
+            let agentId = dict["agentId"] as? String
+            self.inspectedElementInfo = InspectedElementInfo(
+                selector: selector,
+                tag: tag,
+                idAttr: idAttr,
+                classes: classes,
+                text: text,
+                width: width,
+                height: height,
+                agentId: agentId
+            )
+            self.isInspectorActive = false
+        } else if name == "nomadNetwork", let dict = body as? [String: Any] {
+            let method = dict["method"] as? String ?? "GET"
+            let url = dict["url"] as? String ?? ""
+            let status = dict["status"] as? Int ?? 200
+            let duration = dict["duration"] as? Int ?? 0
+            let type = dict["type"] as? String ?? "fetch"
+            let error = dict["error"] as? String
+            let entry = NetworkEntry(method: method, url: url, status: status, durationMs: duration, type: type, error: error)
+            if self.networkEntries.count > 400 {
+                self.networkEntries.removeFirst(50)
+            }
+            self.networkEntries.append(entry)
         }
     }
 
@@ -552,6 +809,10 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
         }
     }
 
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        self.networkEntries.removeAll()
+    }
+
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         self.isLoading = false
         print("Tab Navigation failed: \(error.localizedDescription)")
@@ -718,4 +979,27 @@ final class BrowserWebView: WKWebView {
         }
     }
 }
+
+// MARK: - Script Message Handler & Bridge
+final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    private weak var delegate: WKScriptMessageHandler?
+
+    init(delegate: WKScriptMessageHandler) {
+        self.delegate = delegate
+        super.init()
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        delegate?.userContentController(userContentController, didReceive: message)
+    }
+}
+
+extension Tab: WKScriptMessageHandler {
+    nonisolated func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        Task { @MainActor [weak self] in
+            self?.handleScriptMessage(name: message.name, body: message.body)
+        }
+    }
+}
+
 

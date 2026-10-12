@@ -128,6 +128,25 @@ struct NavigationControls: View {
             .opacity(canBookmark ? 1.0 : 0.35)
             .help(isBookmarked ? "Remove Bookmark (⌘D)" : "Bookmark Tab (⌘D)")
 
+            let canInspect = !tab.isBlank && !tab.isInternalPage
+
+            Button(action: {
+                guard canInspect else { return }
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                    tab.isDevDrawerVisible.toggle()
+                }
+            }) {
+                Image(systemName: tab.isDevDrawerVisible ? "curlybraces.square.fill" : "curlybraces")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(tab.isDevDrawerVisible ? settings.accentColor : Color.primary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canInspect)
+            .opacity(canInspect ? 1.0 : 0.35)
+            .help("Developer Tools (⌘⌥I)")
+
             let isSettingsActive = tab.url?.host == "settings"
 
             Button(action: { store.openSettings() }) {

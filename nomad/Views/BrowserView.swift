@@ -109,6 +109,15 @@ struct BrowserView: View {
                 // Print / PDF Export (⌘P)
                 Button("") { store.activeTab?.printPage() }
                     .keyboardShortcut("p", modifiers: .command)
+                // Developer Tools / Dev Drawer (⌘⌥I)
+                Button("") {
+                    if let tab = store.activeTab, !tab.isInternalPage && !tab.isBlank {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                            tab.isDevDrawerVisible.toggle()
+                        }
+                    }
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
             }
             .opacity(0)
             .allowsHitTesting(false)
@@ -133,8 +142,16 @@ private struct TabStageView: View {
                 EmptyStateView(tab: tab, store: store, settings: settings)
                     .transition(.opacity)
             } else {
-                WebStage(tab: tab)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 0) {
+                    WebStage(tab: tab)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if tab.isDevDrawerVisible {
+                        DevDrawerView(tab: tab, store: store)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             // Chrome/Arc-style Floating Swipe Gesture Indicator

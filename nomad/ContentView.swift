@@ -16,6 +16,12 @@ struct ContentView: View {
             .ignoresSafeArea()
             .frame(minWidth: 640, minHeight: 420)
             .background(WindowConfigurator())
+            .onAppear {
+                NomadAgentServer.shared.start(store: store)
+            }
+            .onDisappear {
+                NomadAgentServer.shared.stop()
+            }
     }
 }
 

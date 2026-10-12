@@ -95,6 +95,8 @@ final class BrowserStore: ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         
         let isClosingActive = (activeTabId == id)
+        let tab = tabs[index]
+        tab.cleanup()
         ExtensionManager.shared.didCloseTab(id: id)
         withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
             tabs.remove(at: index)

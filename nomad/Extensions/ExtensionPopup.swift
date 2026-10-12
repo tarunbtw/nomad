@@ -103,8 +103,9 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
         firstMeasure()
         ticks = 0
         measuring = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
-                self?.grow()
+                self.grow()
             }
         }
     }
@@ -180,12 +181,11 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
 
     private func firstMeasure() {
         guard let web else { return }
-        web.evaluateJavaScript("(\(ExtensionPopup.preferred))()") { [weak self] value, _ in
-            Task { @MainActor in
-                guard let self, web === self.web else { return }
-                guard let pair = value as? [Double], pair.count == 2 else { return }
-                self.apply(NSSize(width: pair[0], height: pair[1]))
-            }
+        Task { @MainActor [weak self] in
+            guard let self, web === self.web else { return }
+            guard let value = try? await web.evaluateJavaScript("(\(ExtensionPopup.preferred))()"),
+                  let pair = value as? [Double], pair.count == 2 else { return }
+            self.apply(NSSize(width: pair[0], height: pair[1]))
         }
     }
 
@@ -217,7 +217,7 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
     """
 
     private func grow() {
-        guard shown, let web, let popover else {
+        guard shown, let web, popover != nil else {
             measuring?.invalidate()
             measuring = nil
             return
@@ -231,14 +231,14 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
         }
 
         if ticks <= 8 {
-            web.evaluateJavaScript("(\(ExtensionPopup.preferred))()") { [weak self] value, _ in
-                Task { @MainActor in
-                    guard let self, let pair = value as? [Double], pair.count == 2 else { return }
-                    let wanted = NSSize(width: pair[0], height: pair[1])
-                    let now = popover.contentSize
-                    if abs(wanted.width - now.width) > 2 || abs(wanted.height - now.height) > 2 {
-                        self.apply(wanted)
-                    }
+            Task { @MainActor [weak self] in
+                guard let self, let popover = self.popover else { return }
+                guard let value = try? await web.evaluateJavaScript("(\(ExtensionPopup.preferred))()"),
+                      let pair = value as? [Double], pair.count == 2 else { return }
+                let wanted = NSSize(width: pair[0], height: pair[1])
+                let now = popover.contentSize
+                if abs(wanted.width - now.width) > 2 || abs(wanted.height - now.height) > 2 {
+                    self.apply(wanted)
                 }
             }
             return
@@ -246,15 +246,16 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
 
         if ticks > 24, ticks % 4 != 0 { return }
 
-        web.evaluateJavaScript("[\(ExtensionPopup.reach)('width'), (() => { const d = document.documentElement; return d && d.scrollHeight > d.clientHeight ? d.scrollHeight : 0; })(), (() => { const m = window.__nomadSizing || (window.__nomadSizing = {}), w = document.documentElement.getBoundingClientRect().width; if (Math.abs(w - innerWidth) > 1) return m.w = w; return m.w && Math.abs(m.w - innerWidth) <= 1 ? m.w : 0; })()]") { [weak self] value, _ in
-            Task { @MainActor in
-                guard let self, let pair = value as? [Double], pair.count == 3 else { return }
-                let now = popover.contentSize
-                let width = pair[2] > 0 ? max(25, pair[2].rounded(.up)) : max(now.width, pair[0])
-                let wanted = NSSize(width: min(800, width), height: min(600, max(now.height, pair[1])))
-                if wanted != now {
-                    self.apply(wanted)
-                }
+        let js = "[\(ExtensionPopup.reach)('width'), (() => { const d = document.documentElement; return d && d.scrollHeight > d.clientHeight ? d.scrollHeight : 0; })(), (() => { const m = window.__nomadSizing || (window.__nomadSizing = {}), w = document.documentElement.getBoundingClientRect().width; if (Math.abs(w - innerWidth) > 1) return m.w = w; return m.w && Math.abs(m.w - innerWidth) <= 1 ? m.w : 0; })()]"
+        Task { @MainActor [weak self] in
+            guard let self, let popover = self.popover else { return }
+            guard let value = try? await web.evaluateJavaScript(js),
+                  let pair = value as? [Double], pair.count == 3 else { return }
+            let now = popover.contentSize
+            let width = pair[2] > 0 ? max(25, pair[2].rounded(.up)) : max(now.width, pair[0])
+            let wanted = NSSize(width: min(800, width), height: min(600, max(now.height, pair[1])))
+            if wanted != now {
+                self.apply(wanted)
             }
         }
     }
