@@ -12,7 +12,9 @@ struct NavigationControls: View {
     @ObservedObject var tab: Tab
     @ObservedObject var store: BrowserStore
     @ObservedObject var settings: SettingsStore = SettingsStore.shared
+    @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var isShowingExtensionsMenu: Bool = false
+    @State private var isShowingDownloadsMenu: Bool = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -72,6 +74,32 @@ struct NavigationControls: View {
             .help("Extensions")
             .popover(isPresented: $isShowingExtensionsMenu, arrowEdge: .bottom) {
                 ExtensionsMenuPopover(tab: tab, store: store, isPresented: $isShowingExtensionsMenu)
+            }
+
+            // Downloads Button (appears when downloads are active or completed)
+            if !downloadManager.downloads.isEmpty {
+                Button(action: { isShowingDownloadsMenu.toggle() }) {
+                    ZStack {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(downloadManager.hasActiveDownloads ? settings.accentColor : Color.primary)
+
+                        if downloadManager.hasActiveDownloads {
+                            Circle()
+                                .trim(from: 0, to: downloadManager.overallProgress)
+                                .stroke(settings.accentColor, lineWidth: 1.5)
+                                .frame(width: 16, height: 16)
+                                .rotationEffect(.degrees(-90))
+                        }
+                    }
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Downloads")
+                .popover(isPresented: $isShowingDownloadsMenu, arrowEdge: .bottom) {
+                    DownloadsMenuPopover(store: store, isPresented: $isShowingDownloadsMenu)
+                }
             }
 
             let urlString = tab.url?.absoluteString ?? ""

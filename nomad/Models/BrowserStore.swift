@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import WebKit
 
 /// Root state container for Nomad browser window.
 /// Manages open tabs, the currently focused tab, and browser actions.
@@ -21,19 +22,42 @@ final class BrowserStore: ObservableObject {
     }
 
     init() {
-        // Start with an initial blank tab
-        let initialTab = newTab(url: nil, select: true)
-        _ = initialTab
+        let restoredURLs = SessionManager.shared.restore()
+        if !restoredURLs.isEmpty {
+            for (idx, url) in restoredURLs.enumerated() {
+                newTab(url: url, select: idx == 0, lazy: idx != 0)
+            }
+        } else {
+            // Start with an initial blank tab
+            _ = newTab(url: nil, select: true, lazy: false)
+        }
         ExtensionManager.shared.start(with: self)
+    }
+
+    /// Persists open session tabs to disk.
+    private func persistSession() {
+        SessionManager.shared.save(tabs: tabs, activeTabId: activeTabId)
     }
 
     /// Creates and appends a new tab.
     @discardableResult
-    func newTab(url: URL? = nil, select: Bool = true) -> Tab {
-        let tab = Tab(initialURL: url)
+    func newTab(url: URL? = nil, configuration: WKWebViewConfiguration? = nil, select: Bool = true, lazy: Bool = false) -> Tab {
+        let tab = Tab(initialURL: url, configuration: configuration, lazy: lazy)
         
         tab.onOpenURLInNewTab = { [weak self] targetURL in
             self?.newTab(url: targetURL, select: true)
+        }
+
+        tab.onOpenTabWithWebView = { [weak self] config, action in
+            guard let self else { return nil }
+            let targetURL = action.request.url
+            let newCreated = self.newTab(url: targetURL, configuration: config, select: true)
+            return newCreated.webView
+        }
+
+        tab.onRequestCloseTab = { [weak self, weak tab] in
+            guard let self, let tab else { return }
+            self.closeTab(id: tab.id)
         }
         
         withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
@@ -47,6 +71,7 @@ final class BrowserStore: ObservableObject {
         if select {
             ExtensionManager.shared.didActivateTab(tab)
         }
+        persistSession()
         
         return tab
     }
@@ -71,6 +96,7 @@ final class BrowserStore: ObservableObject {
                 }
             }
         }
+        persistSession()
     }
 
     /// Selects a tab by ID with smooth content transition.
@@ -80,8 +106,10 @@ final class BrowserStore: ObservableObject {
                 activeTabId = id
             }
             if let tab = tabs.first(where: { $0.id == id }) {
+                tab.ensureLoaded()
                 ExtensionManager.shared.didActivateTab(tab)
             }
+            persistSession()
         }
     }
 

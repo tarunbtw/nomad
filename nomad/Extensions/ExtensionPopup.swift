@@ -42,15 +42,19 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
         close()
         guard let configuration = context.webViewConfiguration else { return }
 
-        let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 25, height: 25), configuration: configuration)
+        let initialSize = ExtensionPopup.lastSize[context.uniqueIdentifier] ?? NSSize(width: 360, height: 600)
+        let stage = NSView(frame: NSRect(origin: .zero, size: initialSize))
+        stage.wantsLayer = true
+        stage.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+
+        let web = WKWebView(frame: NSRect(origin: .zero, size: initialSize), configuration: configuration)
         web.isInspectable = true
         web.uiDelegate = self
         web.navigationDelegate = self
-        web.alphaValue = 0
+        web.autoresizingMask = [.width, .height]
+        web.underPageBackgroundColor = NSColor.windowBackgroundColor
+        web.alphaValue = 1.0
         web.load(URLRequest(url: url))
-
-        let initialSize = ExtensionPopup.lastSize[context.uniqueIdentifier] ?? NSSize(width: 360, height: 500)
-        let stage = NSView(frame: NSRect(origin: .zero, size: initialSize))
         stage.addSubview(web)
 
         let host = NSViewController()
@@ -73,7 +77,7 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
         self.page = page
         ExtensionManager.shared.controller.didOpenTab(page)
 
-        shown = false
+        shown = true
 
         if let anchor, anchor.window != nil {
             popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
@@ -84,32 +88,19 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
             popover.show(relativeTo: spot, of: content, preferredEdge: flipped ? .maxY : .minY)
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak popover] in
-            guard let self, let popover, popover === self.popover else { return }
-            self.firstMeasure()
-            self.follow()
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self, weak popover] in
-            guard let self, let popover, popover === self.popover else { return }
-            self.reveal()
-        }
+        follow()
     }
 
     private func reveal() {
-        guard !shown, let web, let stage = popover?.contentViewController?.view else { return }
-        shown = true
+        guard let web, let stage = popover?.contentViewController?.view else { return }
         web.frame = NSRect(origin: .zero, size: popover?.contentSize ?? stage.bounds.size)
         web.autoresizingMask = [.width, .height]
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
-            web.animator().alphaValue = 1
-        }
+        web.alphaValue = 1.0
     }
 
     private func follow() {
         guard measuring == nil else { return }
-        if !shown { firstMeasure() }
+        firstMeasure()
         ticks = 0
         measuring = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -188,10 +179,10 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
     }
 
     private func firstMeasure() {
-        guard let web, !shown else { return }
+        guard let web else { return }
         web.evaluateJavaScript("(\(ExtensionPopup.preferred))()") { [weak self] value, _ in
             Task { @MainActor in
-                guard let self, web === self.web, !self.shown else { return }
+                guard let self, web === self.web else { return }
                 guard let pair = value as? [Double], pair.count == 2 else { return }
                 self.apply(NSSize(width: pair[0], height: pair[1]))
             }
@@ -226,8 +217,19 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
     """
 
     private func grow() {
-        guard shown, let web, let popover else { return }
+        guard shown, let web, let popover else {
+            measuring?.invalidate()
+            measuring = nil
+            return
+        }
         ticks += 1
+        if ticks > 16 {
+            // Sized and settled (4 seconds). Invalidate timer to eliminate continuous CPU wakeups.
+            measuring?.invalidate()
+            measuring = nil
+            return
+        }
+
         if ticks <= 8 {
             web.evaluateJavaScript("(\(ExtensionPopup.preferred))()") { [weak self] value, _ in
                 Task { @MainActor in
@@ -264,7 +266,7 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let url = action.request.url {
-            ExtensionManager.shared.store?.newTab(url: url, select: true)
+            ExtensionManager.shared.store?.newTab(url: url, configuration: configuration, select: true)
         }
         close()
         return nil

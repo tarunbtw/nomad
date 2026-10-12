@@ -39,7 +39,7 @@ enum ExtensionShims {
     nonisolated static let stamp = ".nomad-shim"
     /// Raised when `prepare` changes what it does to a package, so that
     /// extensions prepared before are prepared again.
-    nonisolated private static let preparation = "2"
+    nonisolated private static let preparation = "3"
     nonisolated static let version: String = {
         SHA256.hash(data: Data((script + preparation).utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }()
@@ -3501,6 +3501,88 @@ enum ExtensionShims {
         case "identity.getAuthToken":
             return nil
 
+        // MARK: tabs
+        case "tabs.describe":
+            let places = first as? [Any] ?? []
+            let tabs = manager.store?.tabs ?? []
+            return places.map { place -> Any in
+                let spec = place as? [String: Any]
+                guard let index = (place as? NSNumber)?.intValue ?? (spec?["i"] as? NSNumber)?.intValue,
+                      tabs.indices.contains(index) else {
+                    return ["url": "", "title": ""]
+                }
+                let tab = tabs[index]
+                return [
+                    "url": tab.url?.absoluteString ?? "",
+                    "title": tab.title
+                ]
+            }
+
+        case "tabs.groups":
+            let places = first as? [Any] ?? []
+            return places.map { _ in -1 }
+
+        case "tabs.move", "tabs.discard", "tabs.activate":
+            let spec = first as? [String: Any]
+            let tabs = manager.store?.tabs ?? []
+            if let index = (first as? NSNumber)?.intValue ?? (spec?["i"] as? NSNumber)?.intValue,
+               tabs.indices.contains(index) {
+                let tab = tabs[index]
+                if api == "tabs.activate" {
+                    manager.store?.activeTabId = tab.id
+                }
+            }
+            return nil
+
+        // MARK: user scripts
+        case "userScripts.file":
+            return nil
+        case "userScripts.list":
+            return []
+        case "userScripts.save":
+            return nil
+        case "userScripts.world", "userScripts.worlds":
+            return api == "userScripts.worlds" ? [] : nil
+
+        // MARK: system
+        case "system.cpu.getInfo":
+            return [
+                "numOfProcessors": ProcessInfo.processInfo.processorCount,
+                "archName": "arm64",
+                "modelName": "Apple Silicon",
+                "features": [],
+                "processors": []
+            ]
+        case "system.memory.getInfo":
+            return [
+                "capacity": Double(ProcessInfo.processInfo.physicalMemory),
+                "availableCapacity": Double(ProcessInfo.processInfo.physicalMemory / 2)
+            ]
+        case "system.storage.getInfo":
+            return []
+        case "system.display.getInfo":
+            if let screen = NSScreen.main {
+                let f = screen.frame
+                return [[
+                    "id": "screen-main",
+                    "name": "Main Display",
+                    "isPrimary": true,
+                    "bounds": ["left": 0, "top": 0, "width": Int(f.width), "height": Int(f.height)],
+                    "workArea": ["left": 0, "top": 0, "width": Int(f.width), "height": Int(f.height)]
+                ]]
+            }
+            return []
+
+        // MARK: privacy & proxy
+        case "privacy.services.passwordSavingEnabled":
+            return true
+        case "privacy.network.webRTCIPHandlingPolicy":
+            return "default"
+        case "privacy.websites.doNotTrackEnabled", "privacy.websites.adMeasurementEnabled":
+            return false
+        case "proxy.settings":
+            return ["mode": "system"]
+
         // MARK: bookmarks & history & other stubs
         case _ where api.hasPrefix("bookmarks."):
             return []
@@ -3516,8 +3598,6 @@ enum ExtensionShims {
             return []
         case _ where api.hasPrefix("readingList."):
             return []
-        case _ where api.hasPrefix("system."):
-            return ["numOfProcessors": 8]
 
         default:
             NSLog("[Nomad Extension Shim] Unhandled API: %@", api)

@@ -68,20 +68,37 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     @Published var swipeState: SwipeGestureState? = nil
     
     /// The retained custom web view for this tab.
-    let webView: BrowserWebView
+    private(set) var webView: BrowserWebView
     
     /// Optional hook called when web content requests opening a new window (e.g. target="_blank").
     var onOpenURLInNewTab: ((URL) -> Void)?
+
+    /// Hook to create a full new tab and return its WKWebView when a page requests window.open / target="_blank"
+    var onOpenTabWithWebView: ((WKWebViewConfiguration, WKNavigationAction) -> WKWebView?)?
+
+    /// Hook to close this tab if it was opened solely for an immediate file download
+    var onRequestCloseTab: (() -> Void)?
     
+    private(set) var hasLoaded: Bool = false
     private var observers: [NSKeyValueObservation] = []
 
-    init(id: UUID = UUID(), initialURL: URL? = nil) {
+    init(id: UUID = UUID(), initialURL: URL? = nil, configuration: WKWebViewConfiguration? = nil, lazy: Bool = false) {
         self.id = id
         self.url = initialURL
-        self.title = "New Tab"
+
+        if let initialURL = initialURL,
+           (initialURL.scheme == ExtensionManager.scheme || initialURL.scheme == "webkit-extension"),
+           let host = initialURL.host,
+           let ext = ExtensionManager.shared.installed.first(where: { $0.id == host }) {
+            self.title = ext.name
+        } else {
+            self.title = initialURL?.host ?? "New Tab"
+        }
+
+        self.isBlank = (initialURL == nil || initialURL?.absoluteString == "about:blank")
         
-        let config = WebKitPool.makeConfiguration()
-        let webView = BrowserWebView(frame: NSRect(x: 0, y: 0, width: 1180, height: 730), configuration: config)
+        let effectiveConfig = configuration ?? ExtensionManager.shared.configuration(for: initialURL) ?? WebKitPool.makeConfiguration()
+        let webView = BrowserWebView(frame: NSRect(x: 0, y: 0, width: 1180, height: 730), configuration: effectiveConfig)
         webView.customUserAgent = WebKitPool.customUserAgent
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsMagnification = false
@@ -98,8 +115,22 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         setupObservers()
         
         if let initialURL = initialURL {
-            load(url: initialURL)
+            if lazy {
+                self.hasLoaded = false
+            } else {
+                self.hasLoaded = true
+                load(url: initialURL)
+            }
+        } else {
+            self.hasLoaded = true
         }
+    }
+
+    /// Loads the URL if this tab was lazily preserved in the background on startup.
+    func ensureLoaded() {
+        guard !hasLoaded, let url = self.url, !isBlank, !isInternalPage else { return }
+        hasLoaded = true
+        load(url: url)
     }
 
     // MARK: - Swipe Gesture Coordinator
@@ -158,12 +189,47 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             return
         }
 
+        if url.scheme == ExtensionManager.scheme || url.scheme == "webkit-extension" {
+            if let host = url.host, let ext = ExtensionManager.shared.installed.first(where: { $0.id == host }) {
+                self.title = ext.name
+            }
+            ensureConfiguration(for: url)
+        }
+
         self.isBlank = (url.absoluteString == "about:blank")
         self.favicon = nil
         webView.setMagnification(1.0, centeredAt: .zero)
         let request = URLRequest(url: url)
         webView.load(request)
         fetchFavicon(for: url)
+    }
+
+    /// Dynamically switches the web view configuration if navigating to an extension that requires WKWebExtensionContext.webViewConfiguration.
+    func ensureConfiguration(for targetURL: URL) {
+        guard (targetURL.scheme == ExtensionManager.scheme || targetURL.scheme == "webkit-extension"),
+              let host = targetURL.host,
+              let targetConfig = ExtensionManager.shared.contexts[host]?.webViewConfiguration,
+              webView.configuration !== targetConfig else {
+            return
+        }
+
+        observers.forEach { $0.invalidate() }
+        observers.removeAll()
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        webView.tab = nil
+
+        let newWebView = BrowserWebView(frame: NSRect(x: 0, y: 0, width: 1180, height: 730), configuration: targetConfig)
+        newWebView.customUserAgent = WebKitPool.customUserAgent
+        newWebView.allowsBackForwardNavigationGestures = false
+        newWebView.allowsMagnification = false
+        newWebView.setMagnification(1.0, centeredAt: .zero)
+        newWebView.pageZoom = 1.0
+        newWebView.tab = self
+        newWebView.navigationDelegate = self
+        newWebView.uiDelegate = self
+        self.webView = newWebView
+        setupObservers()
     }
 
     func goBack() {
@@ -212,6 +278,57 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         }
     }
 
+    // MARK: - Find in Page (⌘F)
+    @Published var isFindBarVisible: Bool = false
+    @Published var findQuery: String = ""
+    @Published var findHasMatches: Bool = false
+
+    func findInPage(_ query: String, forward: Bool = true) {
+        self.findQuery = query
+        guard !query.isEmpty else {
+            clearFind()
+            return
+        }
+
+        let config = WKFindConfiguration()
+        config.backwards = !forward
+        config.caseSensitive = false
+        config.wraps = true
+
+        webView.find(query, configuration: config) { [weak self] result in
+            Task { @MainActor in
+                self?.findHasMatches = result.matchFound
+            }
+        }
+    }
+
+    func clearFind() {
+        findQuery = ""
+        findHasMatches = false
+        webView.evaluateJavaScript("window.getSelection().removeAllRanges()", completionHandler: nil)
+    }
+
+    func closeFind() {
+        isFindBarVisible = false
+        clearFind()
+    }
+
+    // MARK: - Native Print & PDF Export (⌘P)
+    func printPage() {
+        guard !isInternalPage else { return }
+        let printInfo = NSPrintInfo.shared
+        printInfo.orientation = .portrait
+        printInfo.horizontalPagination = .automatic
+        printInfo.verticalPagination = .automatic
+
+        let printOperation = webView.printOperation(with: printInfo)
+        if let window = webView.window {
+            printOperation.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
+        } else {
+            printOperation.run()
+        }
+    }
+
     // MARK: - KVO Observers
     private func setupObservers() {
         observers.append(webView.observe(\.title, options: [.new]) { [weak self] wv, _ in
@@ -219,7 +336,16 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             let newTitle = wv.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             Task { @MainActor [weak self] in
                 guard let self, !self.isInternalPage else { return }
-                self.title = newTitle.isEmpty ? (self.url?.host ?? "New Tab") : newTitle
+                if !newTitle.isEmpty {
+                    self.title = newTitle
+                } else if let url = self.url ?? self.webView.url,
+                          (url.scheme == ExtensionManager.scheme || url.scheme == "webkit-extension"),
+                          let host = url.host,
+                          let ext = ExtensionManager.shared.installed.first(where: { $0.id == host }) {
+                    self.title = ext.name
+                } else {
+                    self.title = self.url?.host ?? "New Tab"
+                }
                 ExtensionManager.shared.tabDidChange(self, properties: [.title])
             }
         })
@@ -229,10 +355,12 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             let newURL = wv.url
             Task { @MainActor [weak self] in
                 guard let self, !self.isInternalPage else { return }
-                self.url = newURL
-                self.isBlank = (newURL == nil || newURL?.absoluteString == "about:blank")
                 if let newURL = newURL {
+                    self.url = newURL
+                    self.isBlank = (newURL.absoluteString == "about:blank")
                     self.fetchFavicon(for: newURL)
+                } else if self.url == nil {
+                    self.isBlank = true
                 }
                 ExtensionManager.shared.tabDidChange(self, properties: [.URL])
             }
@@ -297,6 +425,97 @@ final class Tab: NSObject, Identifiable, ObservableObject {
 
 // MARK: - WKNavigationDelegate & WKUIDelegate
 extension Tab: WKNavigationDelegate, WKUIDelegate {
+    // MARK: - Navigation Policy & Security Scheme Validation
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences, decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
+        if navigationAction.shouldPerformDownload {
+            decisionHandler(.download, preferences)
+            return
+        }
+
+        // Security scheme validation
+        if let targetURL = navigationAction.request.url {
+            let scheme = targetURL.scheme?.lowercased() ?? ""
+            // Disallow untrusted remote web pages from navigating to local file URLs or internal nomad schemes
+            if let currentURL = webView.url, currentURL.scheme != "nomad" && (scheme == "nomad" || scheme == "file") {
+                decisionHandler(.cancel, preferences)
+                return
+            }
+        }
+
+        decisionHandler(.allow, preferences)
+    }
+
+    // MIME type & Content-Disposition check for downloads (.zip, .dmg, .pkg, images with attachment header, etc.)
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        // A redirect (3xx) has nowhere to be shown and carries no content of its own, but must be followed
+        if let http = navigationResponse.response as? HTTPURLResponse, (300...399).contains(http.statusCode) {
+            decisionHandler(.allow)
+            return
+        }
+        // A server that says "attachment" means a file to keep (like Wallhaven wallpaper downloads)
+        if let http = navigationResponse.response as? HTTPURLResponse,
+           let disposition = http.value(forHTTPHeaderField: "Content-Disposition"),
+           disposition.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("attachment") {
+            decisionHandler(.download)
+            return
+        }
+        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
+    }
+
+    // Connect WebKit downloads to DownloadManager
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        let originalURL = navigationAction.request.url ?? URL(string: "about:blank")!
+        DownloadManager.shared.register(download, from: originalURL)
+        if self.isBlank || self.webView.url == nil {
+            onRequestCloseTab?()
+        }
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        let originalURL = navigationResponse.response.url ?? URL(string: "about:blank")!
+        let suggested = navigationResponse.response.suggestedFilename ?? "download"
+        DownloadManager.shared.register(download, from: originalURL, suggestedFilename: suggested)
+        if self.isBlank || self.webView.url == nil {
+            onRequestCloseTab?()
+        }
+    }
+
+    @objc(_webView:contextMenuDidCreateDownload:)
+    func webView(_ webView: WKWebView, contextMenuDidCreateDownload download: WKDownload) {
+        let originalURL = webView.url ?? URL(string: "about:blank")!
+        DownloadManager.shared.register(download, from: originalURL)
+    }
+
+    // TLS Certificate Validation & Security Challenges
+    func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust {
+            if let serverTrust = challenge.protectionSpace.serverTrust {
+                var secError: CFError?
+                let isValid = SecTrustEvaluateWithError(serverTrust, &secError)
+                if isValid {
+                    completionHandler(.useCredential, URLCredential(trust: serverTrust))
+                    return
+                }
+
+                // Prompt user for untrusted / self-signed certificate
+                let host = challenge.protectionSpace.host
+                let alert = NSAlert()
+                alert.messageText = "Security Warning: Untrusted Certificate"
+                alert.informativeText = "The certificate for \"\(host)\" is invalid or self-signed. Visiting this site may compromise your privacy.\n\nDo you want to continue anyway?"
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Continue Anyway")
+
+                let response = alert.runModal()
+                if response == .alertSecondButtonReturn {
+                    completionHandler(.useCredential, URLCredential(trust: serverTrust))
+                    return
+                }
+            }
+        }
+        completionHandler(.performDefaultHandling, nil)
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         self.isLoading = false
         if webView.magnification != 1.0 {
@@ -304,6 +523,9 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
         }
         if let currentURL = webView.url {
             fetchFavicon(for: currentURL)
+
+            // Record visited page in HistoryStore
+            HistoryStore.shared.addVisit(url: currentURL, title: self.title)
 
             let js = "document.querySelector(\"link[rel~='icon'], link[rel='shortcut icon']\")?.href || \"\""
             webView.evaluateJavaScript(js) { [weak self] result, _ in
@@ -334,7 +556,16 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
         print("Tab Provisional navigation failed: \(error.localizedDescription)")
     }
 
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        self.isLoading = false
+        print("Tab WebContent process terminated, automatically reloading...")
+        webView.reload()
+    }
+
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let onOpenTabWithWebView = self.onOpenTabWithWebView {
+            return onOpenTabWithWebView(configuration, navigationAction)
+        }
         if let targetURL = navigationAction.request.url {
             if let onOpenURLInNewTab = self.onOpenURLInNewTab {
                 onOpenURLInNewTab(targetURL)

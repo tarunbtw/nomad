@@ -87,6 +87,18 @@ struct BrowserView: View {
                     .keyboardShortcut("-", modifiers: .command)
                 Button("") { store.activeTab?.resetZoom() }
                     .keyboardShortcut("0", modifiers: .command)
+                // Find in Page (⌘F)
+                Button("") {
+                    if let tab = store.activeTab, !tab.isInternalPage && !tab.isBlank {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+                            tab.isFindBarVisible.toggle()
+                        }
+                    }
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                // Print / PDF Export (⌘P)
+                Button("") { store.activeTab?.printPage() }
+                    .keyboardShortcut("p", modifiers: .command)
             }
             .opacity(0)
             .allowsHitTesting(false)
@@ -125,6 +137,18 @@ private struct TabStageView: View {
             if let swipe = tab.swipeState {
                 SwipeIndicatorView(swipe: swipe, accentColor: settings.accentColor)
                     .transition(.opacity)
+            }
+
+            // Sleek Floating Find in Page Bar (⌘F)
+            if tab.isFindBarVisible {
+                FindInPageView(tab: tab)
+                    .padding(.top, 12)
+                    .padding(.trailing, 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .opacity
+                    ))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -242,6 +266,43 @@ private struct EmptyStateView: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(isFocused ? settings.accentColor.opacity(0.5) : Color.primary.opacity(0.12), lineWidth: 1)
                 )
+
+                // History Autocomplete Dropdown
+                let suggestions = HistoryStore.shared.suggestions(for: text)
+                if !suggestions.isEmpty && isFocused {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(suggestions) { item in
+                            Button(action: {
+                                text = item.url
+                                submit()
+                            }) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "clock.arrow.circlepath")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                    Text(item.title)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text(item.host)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .frame(width: 480)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(.ultraThinMaterial)
+                            .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 3)
+                    )
+                }
 
                 // Quick Bookmarks row below the field
                 if !settings.bookmarks.isEmpty {

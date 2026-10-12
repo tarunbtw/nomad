@@ -135,13 +135,40 @@ final class ExtensionManager: NSObject, ObservableObject {
             context.uniqueIdentifier = item.id
             context.isInspectable = true
 
+            // Set stable origin and baseURL matching the extension ID (chrome-extension://<id>/)
+            // Essential for Phantom, Trust Wallet, and standard extensions to preserve IndexedDB/storage
+            if let stable = URL(string: "\(ExtensionManager.scheme)://\(item.id)/") {
+                context.baseURL = stable
+            }
+
             // Automatically grant requested permissions approved during installation
             for permission in extensionObj.requestedPermissions {
                 context.setPermissionStatus(.grantedExplicitly, for: permission)
             }
             context.setPermissionStatus(.grantedExplicitly, for: .nativeMessaging)
-            for pattern in extensionObj.requestedPermissionMatchPatterns {
+            
+            // Grant all requested match patterns (host permissions for RPC/API endpoints like Solana and Ethereum)
+            for pattern in extensionObj.allRequestedMatchPatterns {
                 context.setPermissionStatus(.grantedExplicitly, for: pattern)
+            }
+
+            // Explicitly grant the extension's own origin patterns
+            if let ownChrome = try? WKWebExtension.MatchPattern(string: "\(ExtensionManager.scheme)://\(item.id)/*") {
+                context.setPermissionStatus(.grantedExplicitly, for: ownChrome)
+            }
+            if let ownWebkit = try? WKWebExtension.MatchPattern(string: "webkit-extension://\(item.id)/*") {
+                context.setPermissionStatus(.grantedExplicitly, for: ownWebkit)
+            }
+
+            for string in ["file:///*", "file://*/*"] {
+                if let files = try? WKWebExtension.MatchPattern(string: string) {
+                    context.setPermissionStatus(.deniedExplicitly, for: files)
+                }
+            }
+
+            // Sign-in / OAuth address
+            if let own = try? WKWebExtension.MatchPattern(string: "https://\(item.id).chromiumapp.org/*") {
+                context.setPermissionStatus(.grantedExplicitly, for: own)
             }
 
             try controller.load(context)
@@ -237,12 +264,21 @@ final class ExtensionManager: NSObject, ObservableObject {
     func openOptionsPage(for id: String) {
         guard let context = contexts[id] else { return }
         if let url = context.optionsPageURL {
-            store?.newTab(url: url, select: true)
+            store?.newTab(url: url, configuration: context.webViewConfiguration, select: true)
         } else if let ext = installed.first(where: { $0.id == id }),
                   let optionsPath = ext.optionsPath,
                   let url = URL(string: optionsPath, relativeTo: context.baseURL) {
-            store?.newTab(url: url, select: true)
+            store?.newTab(url: url, configuration: context.webViewConfiguration, select: true)
         }
+    }
+
+    /// Obtains the specialized WKWebViewConfiguration for an extension URL if loaded.
+    func configuration(for url: URL?) -> WKWebViewConfiguration? {
+        guard let url, let host = url.host,
+              url.scheme == ExtensionManager.scheme || url.scheme == "webkit-extension" else {
+            return nil
+        }
+        return contexts[host]?.webViewConfiguration
     }
 
     /// Activates an extension: opens its popup or fires its action.
@@ -251,9 +287,9 @@ final class ExtensionManager: NSObject, ObservableObject {
         if ExtensionPopup.shared.closes(id) { return }
 
         let activeAdapter = store?.activeTab.flatMap { adapter(for: $0) }
-        let action = context.action(for: activeAdapter)
 
-        if action?.presentsPopup == true, let url = ExtensionManager.popupURL(for: context) {
+        // If the extension declares a default popup (like Phantom, Trust Wallet, uBlock), open its popup directly!
+        if let url = ExtensionManager.popupURL(for: context) {
             ExtensionPopup.shared.show(url, for: context, from: anchor(for: id))
             return
         }
@@ -265,8 +301,31 @@ final class ExtensionManager: NSObject, ObservableObject {
     static func popupURL(for context: WKWebExtensionContext) -> URL? {
         let manifest = context.webExtension.manifest
         let action = (manifest["action"] ?? manifest["browser_action"]) as? [String: Any]
-        guard let path = action?["default_popup"] as? String, !path.isEmpty else { return nil }
-        return URL(string: path, relativeTo: context.baseURL)?.absoluteURL
+        if let path = action?["default_popup"] as? String, !path.isEmpty {
+            return URL(string: path, relativeTo: context.baseURL)?.absoluteURL
+        }
+        return nil
+    }
+
+    /// Resolves a fallback page (e.g. home.html, onboarding.html, popup.html) if an extension opens a bare scheme URL
+    static func defaultPage(for context: WKWebExtensionContext) -> String? {
+        let folder = ExtensionManager.extensionsFolder.appendingPathComponent(context.uniqueIdentifier, isDirectory: true)
+        if FileManager.default.fileExists(atPath: folder.appendingPathComponent("home.html").path) {
+            return "home.html"
+        }
+        if FileManager.default.fileExists(atPath: folder.appendingPathComponent("onboarding.html").path) {
+            return "onboarding.html"
+        }
+        let manifest = context.webExtension.manifest
+        let action = (manifest["action"] ?? manifest["browser_action"]) as? [String: Any]
+        if let popup = action?["default_popup"] as? String, !popup.isEmpty {
+            return popup
+        }
+        if let sidePanel = manifest["side_panel"] as? [String: Any],
+           let path = sidePanel["default_path"] as? String, !path.isEmpty {
+            return path
+        }
+        return "popup.html"
     }
 
     // MARK: - Persistence
@@ -307,8 +366,18 @@ extension ExtensionManager: WKWebExtensionControllerDelegate {
 
     func webExtensionController(_ controller: WKWebExtensionController, openNewTabUsing configuration: WKWebExtension.TabConfiguration, for extensionContext: WKWebExtensionContext) async throws -> (any WKWebExtensionTab)? {
         guard let store else { return nil }
-        let url = configuration.url ?? URL(string: "about:blank")!
-        let newTab = store.newTab(url: url, select: configuration.shouldBeActive)
+        var url = configuration.url ?? URL(string: "about:blank")!
+        if url.scheme == nil || url.scheme?.isEmpty == true {
+            if let resolved = URL(string: url.relativeString, relativeTo: extensionContext.baseURL)?.absoluteURL {
+                url = resolved
+            }
+        } else if url.scheme == ExtensionManager.scheme && (url.path.isEmpty || url.path == "/") {
+            if let fallback = ExtensionManager.defaultPage(for: extensionContext),
+               let resolved = URL(string: fallback, relativeTo: extensionContext.baseURL)?.absoluteURL {
+                url = resolved
+            }
+        }
+        let newTab = store.newTab(url: url, configuration: extensionContext.webViewConfiguration, select: configuration.shouldBeActive)
         return adapter(for: newTab)
     }
 
@@ -316,8 +385,19 @@ extension ExtensionManager: WKWebExtensionControllerDelegate {
         guard let store else { return nil }
         let urls = configuration.tabURLs
         let targetURLs = urls.isEmpty ? [URL(string: "about:blank")!] : urls
-        for (idx, targetURL) in targetURLs.enumerated() {
-            store.newTab(url: targetURL, select: idx == 0)
+        for (idx, mutURL) in targetURLs.enumerated() {
+            var url = mutURL
+            if url.scheme == nil || url.scheme?.isEmpty == true {
+                if let resolved = URL(string: url.relativeString, relativeTo: extensionContext.baseURL)?.absoluteURL {
+                    url = resolved
+                }
+            } else if url.scheme == ExtensionManager.scheme && (url.path.isEmpty || url.path == "/") {
+                if let fallback = ExtensionManager.defaultPage(for: extensionContext),
+                   let resolved = URL(string: fallback, relativeTo: extensionContext.baseURL)?.absoluteURL {
+                    url = resolved
+                }
+            }
+            store.newTab(url: url, configuration: extensionContext.webViewConfiguration, select: idx == 0)
         }
         return currentWindow
     }

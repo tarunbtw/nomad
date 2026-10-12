@@ -27,6 +27,7 @@ struct SettingsView: View {
 
     enum Section: String, CaseIterable, Identifiable {
         case bookmarks = "Bookmarks"
+        case downloads = "Downloads"
         case general = "General"
         case extensions = "Extensions"
 
@@ -35,6 +36,7 @@ struct SettingsView: View {
         var icon: String {
             switch self {
             case .bookmarks: return "bookmark"
+            case .downloads: return "arrow.down.circle"
             case .general: return "gearshape"
             case .extensions: return "puzzlepiece.extension"
             }
@@ -56,6 +58,8 @@ struct SettingsView: View {
                     switch selectedSection {
                     case .bookmarks:
                         bookmarksSection
+                    case .downloads:
+                        downloadsSection
                     case .general:
                         generalSection
                     case .extensions:
@@ -251,6 +255,168 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Downloads Section
+    @ObservedObject private var downloadManager = DownloadManager.shared
+
+    private var downloadsSection: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            header(title: "Downloads", subtitle: "Manage downloaded files, locations, and download history.")
+
+            // Downloads Location & Action Card
+            card(title: "Downloads Location") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(downloadManager.displayPath)
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text("Files downloaded from the web are saved here with macOS quarantine security tags.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Open in Finder") {
+                        downloadManager.openDownloadsFolder()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            // Downloads List Card
+            card(title: "Recent Downloads (\(downloadManager.downloads.count))") {
+                if downloadManager.downloads.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.secondary.opacity(0.5))
+                            .padding(.top, 8)
+                        Text("No downloaded files yet.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                } else {
+                    VStack(spacing: 0) {
+                        HStack {
+                            Spacer()
+                            Button("Clear All") {
+                                downloadManager.clearCompleted()
+                            }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.bottom, 8)
+
+                        ForEach(downloadManager.downloads) { item in
+                            downloadSettingsRow(item: item)
+                            if item.id != downloadManager.downloads.last?.id {
+                                Divider().opacity(0.1).padding(.vertical, 6)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func downloadSettingsRow(item: DownloadItem) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: downloadFileIcon(for: item.suggestedFilename))
+                .font(.system(size: 20))
+                .foregroundStyle(downloadIconColor(for: item.state))
+                .frame(width: 28, height: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.suggestedFilename)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    Text(item.state.rawValue)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(downloadIconColor(for: item.state))
+
+                    if !item.formattedSize.isEmpty {
+                        Text("•")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        Text(item.formattedSize)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let err = item.errorMessage {
+                        Text("— \(err)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.red)
+                            .lineLimit(1)
+                    }
+                }
+            }
+
+            Spacer()
+
+            if item.state == .downloading {
+                ProgressView(value: item.progress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 80)
+
+                Button(action: { item.cancel() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            } else if item.state == .completed {
+                Button("Open") {
+                    downloadManager.openFile(item)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button("Finder") {
+                    downloadManager.showInFinder(item)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            Button(action: { downloadManager.removeDownload(item) }) {
+                Image(systemName: "trash")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Remove from history")
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func downloadFileIcon(for filename: String) -> String {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        switch ext {
+        case "dmg", "pkg": return "shippingbox.fill"
+        case "zip", "tar", "gz", "rar": return "doc.zipper"
+        case "pdf": return "doc.richtext"
+        case "png", "jpg", "jpeg", "webp", "gif": return "photo"
+        case "mp4", "mov", "webm": return "film"
+        case "mp3", "wav", "m4a": return "music.note"
+        default: return "doc.fill"
+        }
+    }
+
+    private func downloadIconColor(for state: DownloadItem.DownloadState) -> Color {
+        switch state {
+        case .downloading: return .blue
+        case .completed: return .green
+        case .failed: return .red
+        case .cancelled: return .secondary
+        }
+    }
+
     // MARK: - General Section
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -265,6 +431,44 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.menu)
                 .frame(maxWidth: 260)
+            }
+
+            card(title: "Privacy & Data") {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Browsing History")
+                                .font(.system(size: 13, weight: .medium))
+                            Text("\(HistoryStore.shared.items.count) visited sites logged locally.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Clear History") {
+                            HistoryStore.shared.clear()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(HistoryStore.shared.items.isEmpty)
+                    }
+
+                    Divider().opacity(0.15)
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Downloads List")
+                                .font(.system(size: 13, weight: .medium))
+                            Text("Clear recent download history without deleting files.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Clear Downloads") {
+                            DownloadManager.shared.clearCompleted()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(DownloadManager.shared.downloads.isEmpty)
+                    }
+                }
             }
         }
     }

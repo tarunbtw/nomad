@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AppKit
+import WebKit
 
 /// An individual tab pill in the tab bar.
 /// Double-clicking expands the tab pill into an inline URL/search field.
@@ -182,6 +183,15 @@ struct TabItemView: View {
                 .controlSize(.mini)
                 .scaleEffect(0.65)
                 .frame(width: 14, height: 14)
+        } else if let scheme = tab.url?.scheme, (scheme == ExtensionManager.scheme || scheme == "webkit-extension"),
+                  let host = tab.url?.host,
+                  let context = ExtensionManager.shared.contexts[host],
+                  let icon = context.action(for: nil)?.icon(for: CGSize(width: 16, height: 16)) {
+            Image(nsImage: icon)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 14, height: 14)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
         } else if let favicon = tab.favicon {
             Image(nsImage: favicon)
                 .resizable()
@@ -201,11 +211,20 @@ struct TabItemView: View {
         if tab.isInternalPage {
             return (tab.url?.host == "tune") ? "slider.horizontal.3" : "gearshape.fill"
         }
+        if let scheme = tab.url?.scheme, (scheme == ExtensionManager.scheme || scheme == "webkit-extension") {
+            return "puzzlepiece.extension"
+        }
         return tab.isBlank ? "sparkles" : "globe"
     }
 
     private var displayTitle: String {
         if tab.isInternalPage {
+            return tab.title
+        }
+        if let scheme = tab.url?.scheme, (scheme == ExtensionManager.scheme || scheme == "webkit-extension") {
+            if let host = tab.url?.host, let ext = ExtensionManager.shared.installed.first(where: { $0.id == host }) {
+                return ext.name
+            }
             return tab.title
         }
         if let host = tab.url?.host, !tab.isBlank {

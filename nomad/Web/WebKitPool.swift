@@ -31,6 +31,12 @@ enum WebKitPool {
         
         // Developer extras for Web Inspector
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        // Throttle inactive and background tabs to stop CPU waste and heat
+        config.preferences.inactiveSchedulingPolicy = .throttle
+        // Enable HTML5 video fullscreen expansion
+        config.preferences.isElementFullscreenEnabled = true
+        // Automatically upgrade known hosts to HTTPS
+        config.upgradeKnownHostsToHTTPS = true
         
         // User content controller for script message handlers and future extensions
         let ucc = WKUserContentController()

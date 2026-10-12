@@ -6,11 +6,12 @@
 //
 
 import Foundation
+import WebKit
 
 /// Resolves user input into a navigable URL.
 /// Handles standard web domains, internal nomad:// schemes, and fallback search queries.
 enum URLParser {
-    private static let supportedSchemes: Set<String> = ["http", "https", "file", "about", "data", "nomad"]
+    private static let supportedSchemes: Set<String> = ["http", "https", "file", "about", "data", "nomad", "chrome-extension", "webkit-extension"]
 
     /// Parses user-typed text into a destination URL.
     @MainActor
@@ -28,6 +29,15 @@ enum URLParser {
         }
         if lower == "tune" || lower == "nomad://tune" {
             return URL(string: "nomad://tune")!
+        }
+
+        // Direct extension ID check: if input matches an installed extension ID, navigate to its default page
+        if let ext = ExtensionManager.shared.installed.first(where: { $0.id == trimmed }),
+           let context = ExtensionManager.shared.contexts[ext.id] {
+            let page = ExtensionManager.defaultPage(for: context) ?? "popup.html"
+            if let url = URL(string: page, relativeTo: context.baseURL)?.absoluteURL {
+                return url
+            }
         }
 
         // If it starts with a recognized scheme (including nomad://), use it directly
