@@ -224,7 +224,7 @@ struct TabItemView: View {
 
     private var iconName: String {
         if tab.isInternalPage {
-            return (tab.url?.host == "tune") ? "slider.horizontal.3" : "gearshape.fill"
+            return "gearshape.fill"
         }
         if tab.isIncognito {
             return "eye.slash.fill"

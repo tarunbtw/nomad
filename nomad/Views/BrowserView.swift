@@ -125,15 +125,9 @@ private struct TabStageView: View {
     var body: some View {
         ZStack {
             if tab.isInternalPage {
-                if tab.url?.host == "tune" {
-                    TuneView(store: store, settings: settings)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.opacity)
-                } else {
-                    SettingsView(store: store, settings: settings)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.opacity)
-                }
+                SettingsView(store: store, settings: settings)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity)
             } else if tab.isBlank {
                 // Calm empty start state when tab has no URL loaded
                 EmptyStateView(tab: tab, store: store, settings: settings)
@@ -329,7 +323,7 @@ private struct EmptyStateView: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    Button(action: { store.openTune() }) {
+                    Button(action: { store.openSettings(section: "General") }) {
                         Image(systemName: "pencil")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(.secondary)
@@ -337,7 +331,7 @@ private struct EmptyStateView: View {
                             .background(Color.primary.opacity(0.05), in: Circle())
                     }
                     .buttonStyle(.plain)
-                    .help("Tune (nomad://tune)")
+                    .help("Customize Appearance (nomad://settings, ⌘,)")
                     .padding(20)
                 }
             }

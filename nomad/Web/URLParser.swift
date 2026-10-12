@@ -23,12 +23,9 @@ enum URLParser {
 
         let lower = trimmed.lowercased()
 
-        // Direct internal schemes (nomad://settings and nomad://tune)
-        if lower == "settings" || lower == "nomad://settings" {
+        // Direct internal schemes (nomad://settings, redirects nomad://tune to settings)
+        if lower == "settings" || lower == "nomad://settings" || lower == "tune" || lower == "nomad://tune" {
             return URL(string: "nomad://settings")!
-        }
-        if lower == "tune" || lower == "nomad://tune" {
-            return URL(string: "nomad://tune")!
         }
 
         // Direct extension ID check: if input matches an installed extension ID, navigate to its default page
