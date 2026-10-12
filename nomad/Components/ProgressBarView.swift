@@ -24,5 +24,6 @@ struct ProgressBarView: View {
             }
         }
         .frame(height: 2)
+        .allowsHitTesting(false)
     }
 }

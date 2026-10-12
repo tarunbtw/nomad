@@ -36,6 +36,7 @@ struct TabStripView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     tabsHStack(computedTabWidth: computedTabWidth)
                 }
+                .frame(height: geo.size.height, alignment: .center)
             } else {
                 HStack(spacing: tabSpacing) {
                     tabsHStack(computedTabWidth: computedTabWidth)
@@ -44,6 +45,7 @@ struct TabStripView: View {
                     WindowDragArea()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .frame(height: geo.size.height, alignment: .center)
             }
         }
     }
@@ -91,6 +93,7 @@ struct TabStripView: View {
             .buttonStyle(.plain)
             .help("New Tab (⌘T)")
         }
+        .frame(height: 30)
         .padding(.leading, 2)
         .padding(.trailing, 4)
         .coordinateSpace(name: "TabStripSpace")

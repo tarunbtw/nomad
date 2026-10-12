@@ -138,7 +138,7 @@ struct TabItemView: View {
         .scaleEffect(isDragging ? 1.02 : 1.0)
         .gesture(
             isEditing ? nil :
-            DragGesture(minimumDistance: 2, coordinateSpace: .named("TabStripSpace"))
+            DragGesture(minimumDistance: 8, coordinateSpace: .named("TabStripSpace"))
                 .onChanged { value in
                     onDragChanged(value.translation.width)
                 }

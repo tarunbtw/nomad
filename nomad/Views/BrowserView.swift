@@ -17,12 +17,18 @@ struct BrowserView: View {
         VStack(spacing: 0) {
             // Top browser chrome (includes bottom progress bar overlay)
             TopBarView(store: store, settings: settings)
+                .frame(height: 50)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+                .zIndex(100)
 
             // Tab Stage (observes activeTab directly with silky crossfade animation)
             if let activeTab = store.activeTab {
                 TabStageView(store: store, tab: activeTab, settings: settings)
                     .id(activeTab.id)
-                    .transition(.opacity.animation(.easeInOut(duration: 0.18)))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .zIndex(0)
             } else {
                 Color.clear
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -231,13 +237,6 @@ private struct EmptyStateView: View {
             // Atmosphere Canvas (Theme Solid, Custom Hex, or Custom Image)
             atmosphereView
 
-            // Tap on background focuses the search field
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    isFocused = true
-                }
-
             // Centered omnibox and quick bookmarks
             VStack(spacing: 16) {
                 // Incognito Private Browsing Badge & Notice
@@ -289,11 +288,14 @@ private struct EmptyStateView: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(isFocused ? settings.accentColor.opacity(0.5) : Color.primary.opacity(0.12), lineWidth: 1)
                 )
-
-                // Interactive Autocomplete Suggestions Dropdown
-                if isFocused && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    OmniboxSuggestionsView(query: text, width: 480) { url in
-                        tab.load(url: url)
+                .overlay(alignment: .top) {
+                    // Floating autocomplete suggestions dropdown directly beneath the field without jumping layout
+                    if isFocused && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        OmniboxSuggestionsView(query: text, width: 480) { url in
+                            tab.load(url: url)
+                        }
+                        .offset(y: 46)
+                        .zIndex(100)
                     }
                 }
 
@@ -357,27 +359,28 @@ private struct EmptyStateView: View {
 
     @ViewBuilder
     private var atmosphereView: some View {
-        switch settings.backgroundStyle {
-        case "hex":
-            settings.customBgColor
-        case "customImage":
-            if !settings.customBgPath.isEmpty,
-               FileManager.default.fileExists(atPath: settings.customBgPath),
-               let nsImage = NSImage(contentsOfFile: settings.customBgPath) {
-                GeometryReader { geo in
-                    Image(nsImage: nsImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
-                        .overlay(Color.black.opacity(0.35))
+        Group {
+            switch settings.backgroundStyle {
+            case "hex":
+                settings.customBgColor
+            case "customImage":
+                if let nsImage = settings.cachedCustomBgImage {
+                    GeometryReader { geo in
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
+                            .overlay(Color.black.opacity(0.35))
+                    }
+                } else {
+                    themeSolidBackground
                 }
-            } else {
+            default:
                 themeSolidBackground
             }
-        default:
-            themeSolidBackground
         }
+        .allowsHitTesting(false)
     }
 
     @ViewBuilder
@@ -430,7 +433,9 @@ struct WindowVibrancyController: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: ConfigNSView, context: Context) {
-        nsView.isVibrant = isVibrant
+        if nsView.isVibrant != isVibrant {
+            nsView.isVibrant = isVibrant
+        }
     }
 }
 

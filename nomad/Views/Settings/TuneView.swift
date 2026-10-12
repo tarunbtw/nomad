@@ -175,8 +175,8 @@ struct TuneView: View {
 
     private var imageStyleOption: some View {
         let isSelected = settings.backgroundStyle == "customImage"
-        let hasImage = !settings.customBgPath.isEmpty && FileManager.default.fileExists(atPath: settings.customBgPath)
-        let nsImage = hasImage ? NSImage(contentsOfFile: settings.customBgPath) : nil
+        let nsImage = settings.cachedCustomBgImage
+        let hasImage = nsImage != nil
 
         return Button(action: {
             if hasImage {

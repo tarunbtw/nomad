@@ -34,7 +34,21 @@ final class SettingsStore: ObservableObject {
     }
 
     @AppStorage("nomad.customBgPath") var customBgPath: String = "" {
-        didSet { objectWillChange.send() }
+        didSet {
+            loadCustomBgImage()
+            objectWillChange.send()
+        }
+    }
+
+    /// Pre-loaded and cached background image to eliminate disk read thrashing during rendering
+    @Published var cachedCustomBgImage: NSImage? = nil
+
+    func loadCustomBgImage() {
+        guard !customBgPath.isEmpty, FileManager.default.fileExists(atPath: customBgPath) else {
+            cachedCustomBgImage = nil
+            return
+        }
+        cachedCustomBgImage = NSImage(contentsOfFile: customBgPath)
     }
 
     @AppStorage("nomad.searchEngine") var searchEngine: String = "duckduckgo" {
@@ -53,6 +67,7 @@ final class SettingsStore: ObservableObject {
 
     init() {
         loadBookmarks()
+        loadCustomBgImage()
         applyTheme()
     }
 

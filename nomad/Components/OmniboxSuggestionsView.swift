@@ -10,7 +10,7 @@ import AppKit
 
 /// Unified suggestion model for bookmarks, history visits, and fallback web search queries.
 struct OmniboxSuggestionItem: Identifiable, Equatable {
-    let id = UUID()
+    var id: String { "\(kind):\(url.absoluteString)" }
     
     enum Kind: Equatable {
         case bookmark
@@ -32,7 +32,7 @@ struct OmniboxSuggestionsView: View {
 
     @ObservedObject private var history = HistoryStore.shared
     @ObservedObject private var settings = SettingsStore.shared
-    @State private var hoveredId: UUID? = nil
+    @State private var hoveredId: String? = nil
 
     private var items: [OmniboxSuggestionItem] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)

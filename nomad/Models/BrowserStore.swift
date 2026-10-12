@@ -22,15 +22,8 @@ final class BrowserStore: ObservableObject {
     }
 
     init() {
-        let restoredURLs = SessionManager.shared.restore()
-        if !restoredURLs.isEmpty {
-            for (idx, url) in restoredURLs.enumerated() {
-                newTab(url: url, select: idx == 0, lazy: idx != 0)
-            }
-        } else {
-            // Start with an initial blank tab
-            _ = newTab(url: nil, select: true, lazy: false)
-        }
+        // Start with an initial clean blank tab
+        _ = newTab(url: nil, select: true, lazy: false)
         ExtensionManager.shared.start(with: self)
     }
 
@@ -42,6 +35,19 @@ final class BrowserStore: ObservableObject {
     /// Creates and appends a new tab.
     @discardableResult
     func newTab(url: URL? = nil, configuration: WKWebViewConfiguration? = nil, isIncognito: Bool = false, select: Bool = true, lazy: Bool = false) -> Tab {
+        // Prevent opening duplicate empty blank tabs:
+        // If requesting a blank new tab (url == nil) and a blank tab already exists, select it instead of duplicating.
+        if url == nil && configuration == nil {
+            if let active = activeTab, active.isBlank && active.isIncognito == isIncognito {
+                return active
+            } else if let existingBlank = tabs.first(where: { $0.isBlank && $0.isIncognito == isIncognito }) {
+                if select {
+                    selectTab(id: existingBlank.id)
+                }
+                return existingBlank
+            }
+        }
+
         let tab = Tab(initialURL: url, configuration: configuration, isIncognito: isIncognito, lazy: lazy)
         
         tab.onOpenURLInNewTab = { [weak self, weak tab] targetURL in

@@ -24,7 +24,8 @@ struct SettingsView: View {
     @ObservedObject private var historyStore = HistoryStore.shared
     @State private var historySearchQuery: String = ""
     @State private var showingClearHistoryAlert: Bool = false
-    @State private var hoveredHistoryId: UUID? = nil
+    @State private var hoveredOpenId: UUID? = nil
+    @State private var hoveredDeleteId: UUID? = nil
     @State private var webStoreInput: String = ""
     @State private var extensionErrorMessage: String? = nil
     @State private var isInstallingExtension: Bool = false
@@ -440,42 +441,6 @@ struct SettingsView: View {
                 .pickerStyle(.menu)
                 .frame(maxWidth: 260)
             }
-
-            card(title: "Privacy & Data") {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Browsing History")
-                                .font(.system(size: 13, weight: .medium))
-                            Text("\(historyStore.items.count) visited sites logged locally.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Manage History") {
-                            selectedSection = .history
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    Divider().opacity(0.15)
-
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Downloads List")
-                                .font(.system(size: 13, weight: .medium))
-                            Text("Clear recent download history without deleting files.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Manage Downloads") {
-                            selectedSection = .downloads
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-            }
         }
     }
 
@@ -616,7 +581,7 @@ struct SettingsView: View {
                     .frame(width: 14, height: 14)
             }
 
-            // Title & Domain
+            // Title & Domain (clickable to open)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
                     .font(.system(size: 13, weight: .medium))
@@ -628,21 +593,37 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-
-            Spacer()
-
-            // Open Action
-            Button("Open") {
+            .contentShape(Rectangle())
+            .onTapGesture {
                 if let url = URL(string: item.url) {
                     store.newTab(url: url, select: true)
                 }
             }
+
+            Spacer()
+
+            // Open Action
+            Button(action: {
+                if let url = URL(string: item.url) {
+                    store.newTab(url: url, select: true)
+                }
+            }) {
+                Text("Open")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(settings.accentColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(
+                        hoveredOpenId == item.id ? settings.accentColor.opacity(0.12) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
+                    .contentShape(Rectangle())
+            }
             .buttonStyle(.plain)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(settings.accentColor)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.primary.opacity(hoveredHistoryId == item.id ? 0.06 : 0.0), in: RoundedRectangle(cornerRadius: 4))
+            .fixedSize()
+            .onHover { isHovered in
+                hoveredOpenId = isHovered ? item.id : nil
+            }
 
             // Delete Visit Record Action
             Button(action: {
@@ -651,23 +632,23 @@ struct SettingsView: View {
                 }
             }) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(hoveredDeleteId == item.id ? .primary : .tertiary)
                     .frame(width: 20, height: 20)
+                    .background(
+                        hoveredDeleteId == item.id ? Color.primary.opacity(0.08) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    )
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .onHover { isHovered in
+                hoveredDeleteId = isHovered ? item.id : nil
+            }
             .help("Remove from history")
         }
         .padding(.vertical, 7)
         .contentShape(Rectangle())
-        .onHover { isHovered in
-            if isHovered {
-                hoveredHistoryId = item.id
-            } else if hoveredHistoryId == item.id {
-                hoveredHistoryId = nil
-            }
-        }
         .contextMenu {
             Button("Open in New Tab") {
                 if let url = URL(string: item.url) {
