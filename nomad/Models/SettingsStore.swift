@@ -42,7 +42,7 @@ final class SettingsStore: ObservableObject {
     }
 
     // MARK: - Navigation State
-    @AppStorage("nomad.settings.activeSection") var activeSection: String = "Bookmarks" {
+    @AppStorage("nomad.settings.activeSection") var activeSection: String = "General" {
         didSet { objectWillChange.send() }
     }
 

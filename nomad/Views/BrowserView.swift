@@ -65,6 +65,8 @@ struct BrowserView: View {
                     .keyboardShortcut("}", modifiers: .command)
                 Button("") { store.openSettings() }
                     .keyboardShortcut(",", modifiers: .command)
+                Button("") { store.openSettings(section: "History") }
+                    .keyboardShortcut("y", modifiers: .command)
                 Button("") {
                     if let tab = store.activeTab,
                        let urlString = tab.url?.absoluteString,

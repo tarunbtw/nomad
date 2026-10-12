@@ -18,6 +18,32 @@ struct HistoryItem: Codable, Identifiable, Equatable {
     var host: String {
         URL(string: url)?.host ?? ""
     }
+
+    enum CodingKeys: String, CodingKey {
+        case id, url, title, timestamp
+    }
+
+    init(id: UUID = UUID(), url: String, title: String, timestamp: Date) {
+        self.id = id
+        self.url = url
+        self.title = title
+        self.timestamp = timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
+        self.url = try container.decode(String.self, forKey: .url)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.timestamp = try container.decode(Date.self, forKey: .timestamp)
+    }
+}
+
+/// Represents a chronological group of visits for a specific calendar date.
+struct HistoryDateGroup: Identifiable {
+    let id: String
+    let title: String
+    let items: [HistoryItem]
 }
 
 /// Lightweight, fast local history storage for visited pages and address bar suggestions.
@@ -80,6 +106,60 @@ final class HistoryStore: ObservableObject {
         }
 
         return results
+    }
+
+    /// Groups history items by calendar day for clean chronological display.
+    func grouped(matching query: String = "") -> [HistoryDateGroup] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let sourceItems: [HistoryItem]
+        if trimmed.isEmpty {
+            sourceItems = items
+        } else {
+            sourceItems = items.filter {
+                $0.title.lowercased().contains(trimmed) ||
+                $0.host.lowercased().contains(trimmed) ||
+                $0.url.lowercased().contains(trimmed)
+            }
+        }
+
+        guard !sourceItems.isEmpty else { return [] }
+
+        let calendar = Calendar.current
+        let now = Date()
+        let todayStart = calendar.startOfDay(for: now)
+        let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: todayStart) ?? todayStart
+
+        let dateFormatter: DateFormatter = {
+            let df = DateFormatter()
+            df.dateStyle = .medium
+            df.timeStyle = .none
+            return df
+        }()
+
+        let groupedDict = Dictionary(grouping: sourceItems) { item in
+            calendar.startOfDay(for: item.timestamp)
+        }
+
+        let sortedDates = groupedDict.keys.sorted(by: >)
+
+        return sortedDates.map { date in
+            let title: String
+            if date >= todayStart {
+                title = "Today"
+            } else if date >= yesterdayStart {
+                title = "Yesterday"
+            } else {
+                title = dateFormatter.string(from: date)
+            }
+            let dayItems = (groupedDict[date] ?? []).sorted(by: { $0.timestamp > $1.timestamp })
+            return HistoryDateGroup(id: "\(date.timeIntervalSince1970)", title: title, items: dayItems)
+        }
+    }
+
+    /// Removes a single visit item by its unique ID.
+    func removeItem(id: UUID) {
+        items.removeAll { $0.id == id }
+        save()
     }
 
     func clear() {
