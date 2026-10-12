@@ -23,6 +23,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     @Published var canGoForward: Bool = false
     @Published var isBlank: Bool = true
     @Published var favicon: NSImage? = nil
+    @Published var isIncognito: Bool = false
 
     /// Detects if this tab is on a Chrome Web Store extension detail page and extracts the 32-letter ID.
     var chromeWebStoreExtensionId: String? {
@@ -82,22 +83,25 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     private(set) var hasLoaded: Bool = false
     private var observers: [NSKeyValueObservation] = []
 
-    init(id: UUID = UUID(), initialURL: URL? = nil, configuration: WKWebViewConfiguration? = nil, lazy: Bool = false) {
+    init(id: UUID = UUID(), initialURL: URL? = nil, configuration: WKWebViewConfiguration? = nil, isIncognito: Bool = false, lazy: Bool = false) {
         self.id = id
         self.url = initialURL
+        self.isIncognito = isIncognito
 
         if let initialURL = initialURL,
            (initialURL.scheme == ExtensionManager.scheme || initialURL.scheme == "webkit-extension"),
            let host = initialURL.host,
            let ext = ExtensionManager.shared.installed.first(where: { $0.id == host }) {
             self.title = ext.name
+        } else if isIncognito && (initialURL == nil || initialURL?.absoluteString == "about:blank") {
+            self.title = "Private Tab"
         } else {
             self.title = initialURL?.host ?? "New Tab"
         }
 
         self.isBlank = (initialURL == nil || initialURL?.absoluteString == "about:blank")
         
-        let effectiveConfig = configuration ?? ExtensionManager.shared.configuration(for: initialURL) ?? WebKitPool.makeConfiguration()
+        let effectiveConfig = configuration ?? ExtensionManager.shared.configuration(for: initialURL) ?? WebKitPool.makeConfiguration(isIncognito: isIncognito)
         let webView = BrowserWebView(frame: NSRect(x: 0, y: 0, width: 1180, height: 730), configuration: effectiveConfig)
         webView.customUserAgent = WebKitPool.customUserAgent
         webView.allowsBackForwardNavigationGestures = false
@@ -524,8 +528,10 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
         if let currentURL = webView.url {
             fetchFavicon(for: currentURL)
 
-            // Record visited page in HistoryStore
-            HistoryStore.shared.addVisit(url: currentURL, title: self.title)
+            // Record visited page in HistoryStore (bypassed in Incognito mode)
+            if !self.isIncognito {
+                HistoryStore.shared.addVisit(url: currentURL, title: self.title)
+            }
 
             let js = "document.querySelector(\"link[rel~='icon'], link[rel='shortcut icon']\")?.href || \"\""
             webView.evaluateJavaScript(js) { [weak self] result, _ in

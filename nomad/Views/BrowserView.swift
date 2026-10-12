@@ -45,6 +45,8 @@ struct BrowserView: View {
             Group {
                 Button("") { store.newTab() }
                     .keyboardShortcut("t", modifiers: .command)
+                Button("") { store.newIncognitoTab() }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("") {
                     if let activeId = store.activeTabId { store.closeTab(id: activeId) }
                 }
@@ -236,9 +238,28 @@ private struct EmptyStateView: View {
 
             // Centered omnibox and quick bookmarks
             VStack(spacing: 16) {
+                // Incognito Private Browsing Badge & Notice
+                if tab.isIncognito {
+                    VStack(spacing: 8) {
+                        Image(systemName: "eye.slash.fill")
+                            .font(.system(size: 32, weight: .semibold))
+                            .foregroundStyle(Color.purple.opacity(0.85))
+
+                        Text("Private Browsing")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.primary)
+
+                        Text("Nomad does not save your history, cookies, or site data for this tab.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.bottom, 6)
+                }
+
                 // Centered "Enter a web address" field
                 HStack(spacing: 8) {
-                    TextField("Enter a web address", text: $text)
+                    TextField(tab.isIncognito ? "Search privately or enter address" : "Enter a web address", text: $text)
                         .textFieldStyle(.plain)
                         .font(.system(size: 14.5, weight: .regular))
                         .foregroundStyle(.primary)
@@ -267,41 +288,11 @@ private struct EmptyStateView: View {
                         .strokeBorder(isFocused ? settings.accentColor.opacity(0.5) : Color.primary.opacity(0.12), lineWidth: 1)
                 )
 
-                // History Autocomplete Dropdown
-                let suggestions = HistoryStore.shared.suggestions(for: text)
-                if !suggestions.isEmpty && isFocused {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(suggestions) { item in
-                            Button(action: {
-                                text = item.url
-                                submit()
-                            }) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "clock.arrow.circlepath")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                    Text(item.title)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text(item.host)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
+                // Interactive Autocomplete Suggestions Dropdown
+                if isFocused && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    OmniboxSuggestionsView(query: text, width: 480) { url in
+                        tab.load(url: url)
                     }
-                    .frame(width: 480)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(.ultraThinMaterial)
-                            .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 3)
-                    )
                 }
 
                 // Quick Bookmarks row below the field

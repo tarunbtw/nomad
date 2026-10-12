@@ -163,6 +163,16 @@ struct TabItemView: View {
                 }
             }
         }
+        .overlay(alignment: .topLeading) {
+            if isEditing && !editText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                OmniboxSuggestionsView(query: editText, width: min(max(tabWidth, 280), 380)) { selectedURL in
+                    tab.load(url: selectedURL)
+                    cancelEdit()
+                }
+                .offset(y: 36)
+                .zIndex(300)
+            }
+        }
         .onChange(of: isActive) { _, active in
             if !active && isEditing {
                 cancelEdit()
@@ -182,6 +192,11 @@ struct TabItemView: View {
             ProgressView()
                 .controlSize(.mini)
                 .scaleEffect(0.65)
+                .frame(width: 14, height: 14)
+        } else if tab.isIncognito && (tab.favicon == nil || tab.isBlank) {
+            Image(systemName: "eye.slash.fill")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(Color.purple.opacity(0.85))
                 .frame(width: 14, height: 14)
         } else if let scheme = tab.url?.scheme, (scheme == ExtensionManager.scheme || scheme == "webkit-extension"),
                   let host = tab.url?.host,
@@ -211,6 +226,9 @@ struct TabItemView: View {
         if tab.isInternalPage {
             return (tab.url?.host == "tune") ? "slider.horizontal.3" : "gearshape.fill"
         }
+        if tab.isIncognito {
+            return "eye.slash.fill"
+        }
         if let scheme = tab.url?.scheme, (scheme == ExtensionManager.scheme || scheme == "webkit-extension") {
             return "puzzlepiece.extension"
         }
@@ -220,6 +238,9 @@ struct TabItemView: View {
     private var displayTitle: String {
         if tab.isInternalPage {
             return tab.title
+        }
+        if tab.isIncognito && (tab.url == nil || tab.isBlank) {
+            return "Private Tab"
         }
         if let scheme = tab.url?.scheme, (scheme == ExtensionManager.scheme || scheme == "webkit-extension") {
             if let host = tab.url?.host, let ext = ExtensionManager.shared.installed.first(where: { $0.id == host }) {

@@ -29,7 +29,7 @@ final class SessionManager {
     /// Saves the current list of open tabs to disk.
     func save(tabs: [Tab], activeTabId: UUID?) {
         let toSave = tabs.compactMap { tab -> SavedSessionTab? in
-            guard let url = tab.url, url.scheme == "http" || url.scheme == "https" else { return nil }
+            guard !tab.isIncognito, let url = tab.url, url.scheme == "http" || url.scheme == "https" else { return nil }
             return SavedSessionTab(
                 url: url.absoluteString,
                 title: tab.title,

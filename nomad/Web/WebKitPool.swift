@@ -19,8 +19,11 @@ enum WebKitPool {
     /// Creates a standardized WKWebViewConfiguration.
     /// Ready for WebExtensions (WKWebExtensionController) and custom user scripts.
     @MainActor
-    static func makeConfiguration() -> WKWebViewConfiguration {
+    static func makeConfiguration(isIncognito: Bool = false) -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
+        if isIncognito {
+            config.websiteDataStore = WKWebsiteDataStore.nonPersistent()
+        }
         ExtensionManager.shared.attach(config)
         
         // Enable modern web preferences with full desktop mode

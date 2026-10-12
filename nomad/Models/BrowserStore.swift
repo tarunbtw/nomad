@@ -41,17 +41,19 @@ final class BrowserStore: ObservableObject {
 
     /// Creates and appends a new tab.
     @discardableResult
-    func newTab(url: URL? = nil, configuration: WKWebViewConfiguration? = nil, select: Bool = true, lazy: Bool = false) -> Tab {
-        let tab = Tab(initialURL: url, configuration: configuration, lazy: lazy)
+    func newTab(url: URL? = nil, configuration: WKWebViewConfiguration? = nil, isIncognito: Bool = false, select: Bool = true, lazy: Bool = false) -> Tab {
+        let tab = Tab(initialURL: url, configuration: configuration, isIncognito: isIncognito, lazy: lazy)
         
-        tab.onOpenURLInNewTab = { [weak self] targetURL in
-            self?.newTab(url: targetURL, select: true)
+        tab.onOpenURLInNewTab = { [weak self, weak tab] targetURL in
+            let isIncog = tab?.isIncognito ?? false
+            self?.newTab(url: targetURL, isIncognito: isIncog, select: true)
         }
 
-        tab.onOpenTabWithWebView = { [weak self] config, action in
+        tab.onOpenTabWithWebView = { [weak self, weak tab] config, action in
             guard let self else { return nil }
             let targetURL = action.request.url
-            let newCreated = self.newTab(url: targetURL, configuration: config, select: true)
+            let isIncog = tab?.isIncognito ?? false
+            let newCreated = self.newTab(url: targetURL, configuration: config, isIncognito: isIncog, select: true)
             return newCreated.webView
         }
 
@@ -74,6 +76,12 @@ final class BrowserStore: ObservableObject {
         persistSession()
         
         return tab
+    }
+
+    /// Creates and opens a new private / incognito tab with isolated ephemeral storage.
+    @discardableResult
+    func newIncognitoTab(url: URL? = nil) -> Tab {
+        newTab(url: url, isIncognito: true, select: true, lazy: false)
     }
 
     /// Closes the specified tab with smooth spring removal.
