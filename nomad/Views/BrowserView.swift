@@ -151,6 +151,7 @@ private struct TabStageView: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
+                .animation(.spring(response: 0.26, dampingFraction: 0.86), value: tab.isDevDrawerVisible)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 

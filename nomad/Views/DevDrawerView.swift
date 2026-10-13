@@ -21,6 +21,8 @@ struct DevDrawerView: View {
     @State private var isDragging: Bool = false
 
     @State private var selectedTab: DevTab = .inspect
+    @State private var isHoveringClose: Bool = false
+    @Namespace private var tabNamespace
     @State private var replInput: String = ""
     @State private var consoleFilter: ConsoleFilter = .all
     @State private var networkFilter: NetworkFilter = .all
@@ -75,19 +77,25 @@ struct DevDrawerView: View {
 
             Divider().opacity(0.12)
 
-            // Content Area
-            Group {
-                switch selectedTab {
-                case .inspect:
-                    inspectTabView
-                case .console:
-                    consoleTabView
-                case .network:
-                    networkTabView
-                case .agent:
-                    agentTabView
-                }
+            // Content Area - ZStack preserves tab views with zero allocation overhead and silky crossfade
+            ZStack {
+                inspectTabView
+                    .opacity(selectedTab == .inspect ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .inspect)
+
+                consoleTabView
+                    .opacity(selectedTab == .console ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .console)
+
+                networkTabView
+                    .opacity(selectedTab == .network ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .network)
+
+                agentTabView
+                    .opacity(selectedTab == .agent ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .agent)
             }
+            .animation(.easeInOut(duration: 0.16), value: selectedTab)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .textBackgroundColor).opacity(0.45))
         }
@@ -117,6 +125,12 @@ struct DevDrawerView: View {
                 NSCursor.pop()
             }
         }
+        .onTapGesture(count: 2) {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                drawerHeight = (drawerHeight > 320) ? 240 : 460
+                dragStartHeight = drawerHeight
+            }
+        }
         .gesture(
             DragGesture(minimumDistance: 1, coordinateSpace: .global)
                 .onChanged { value in
@@ -141,7 +155,11 @@ struct DevDrawerView: View {
             // Tab Selector
             HStack(spacing: 2) {
                 ForEach(DevTab.allCases) { tabOption in
-                    Button(action: { selectedTab = tabOption }) {
+                    Button(action: {
+                        withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
+                            selectedTab = tabOption
+                        }
+                    }) {
                         HStack(spacing: 5) {
                             Image(systemName: tabOption.icon)
                                 .font(.system(size: 10, weight: .medium))
@@ -173,17 +191,28 @@ struct DevDrawerView: View {
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(
-                            selectedTab == tabOption ? Color.primary.opacity(0.08) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        )
+                        .background {
+                            if selectedTab == tabOption {
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(Color.primary.opacity(0.08))
+                                    .matchedGeometryEffect(id: "activeDevTabPill", in: tabNamespace)
+                            }
+                        }
                         .foregroundStyle(selectedTab == tabOption ? Color.primary : Color.secondary)
                     }
                     .buttonStyle(.plain)
                 }
             }
 
-            Spacer()
+            // Flexible empty space that can be double clicked to toggle height without intercepting tab/close buttons
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                        drawerHeight = (drawerHeight > 320) ? 240 : 460
+                        dragStartHeight = drawerHeight
+                    }
+                }
 
             // Safari Web Inspector bridge (zero overhead native fallback)
             Button(action: {
@@ -200,27 +229,22 @@ struct DevDrawerView: View {
             .buttonStyle(.plain)
             .help("Right-click any element on the page and select 'Inspect Element' to use the full Safari Web Inspector")
 
-            // Close Drawer
+            // Close Drawer (immediate 0ms response, fluid spring animation)
             Button(action: {
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
                     tab.isDevDrawerVisible = false
                 }
             }) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(isHoveringClose ? Color.primary : Color.secondary)
                     .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
+                    .background(isHoveringClose ? Color.primary.opacity(0.08) : Color.clear, in: Circle())
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .onHover { isHoveringClose = $0 }
             .help("Close Developer Tools (⌘⌥I)")
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                drawerHeight = (drawerHeight > 320) ? 240 : 460
-                dragStartHeight = drawerHeight
-            }
         }
     }
 

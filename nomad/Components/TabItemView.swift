@@ -248,10 +248,14 @@ struct TabItemView: View {
             }
             return tab.title
         }
-        if let host = tab.url?.host, !tab.isBlank {
+        let trimmedTitle = tab.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty && trimmedTitle != "New Tab" {
+            return trimmedTitle
+        }
+        if let host = tab.url?.host, !host.isEmpty, !tab.isBlank {
             return host
         }
-        return tab.title
+        return tab.isBlank ? "New Tab" : (trimmedTitle.isEmpty ? "New Tab" : trimmedTitle)
     }
 
     private func startEditing() {
