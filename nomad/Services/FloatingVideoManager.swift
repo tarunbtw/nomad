@@ -44,20 +44,39 @@ final class FloatingVideoManager: ObservableObject {
         let webView = tab.webView
         webView.evaluateJavaScript(IsolateScript.on) { [weak self, weak tab] result, error in
             guard let self = self, let tab = tab else { return }
-            if (result as? String) == "floating" {
-                self.present(tab: tab)
+            var aspectW: Double = 16
+            var aspectH: Double = 9
+            var isSuccess = false
+
+            if let jsonStr = result as? String,
+               let data = jsonStr.data(using: .utf8),
+               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               dict["status"] as? String == "floating" {
+                isSuccess = true
+                aspectW = (dict["width"] as? Double) ?? 16
+                aspectH = (dict["height"] as? Double) ?? 9
+            } else if (result as? String) == "floating" {
+                isSuccess = true
+            }
+
+            if isSuccess {
+                self.present(tab: tab, aspectWidth: aspectW, aspectHeight: aspectH)
             } else {
                 print("⚠️ [FloatingVideoManager] No playing video found on this page.")
             }
         }
     }
 
-    private func present(tab: Tab) {
+    private func present(tab: Tab, aspectWidth: Double = 16, aspectHeight: Double = 9) {
         self.activeTab = tab
         self.hostedWebView = tab.webView
         tab.isFloatingVideo = true
 
-        let defaultSize = NSSize(width: 440, height: 247)
+        let ratio = (aspectWidth > 0 && aspectHeight > 0) ? CGFloat(aspectWidth / aspectHeight) : CGFloat(16.0 / 9.0)
+        let defaultWidth: CGFloat = 440
+        let defaultHeight: CGFloat = round(defaultWidth / ratio)
+        let defaultSize = NSSize(width: defaultWidth, height: max(180, min(500, defaultHeight)))
+
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let defaultOrigin = NSPoint(
             x: screen.maxX - defaultSize.width - 24,
@@ -83,9 +102,9 @@ final class FloatingVideoManager: ObservableObject {
         panel.isMovableByWindowBackground = true
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.hasShadow = false
+        panel.hasShadow = true
         panel.isReleasedWhenClosed = false
-        panel.aspectRatio = defaultSize
+        panel.aspectRatio = (aspectWidth > 0 && aspectHeight > 0) ? NSSize(width: aspectWidth, height: aspectHeight) : defaultSize
         panel.minSize = NSSize(width: 260, height: 146)
 
         let ground = NSView(frame: NSRect(origin: .zero, size: spot.size))
@@ -130,6 +149,7 @@ final class FloatingVideoManager: ObservableObject {
         self.controls = controls
 
         panel.contentView = ground
+        panel.invalidateShadow()
         panel.orderFrontRegardless()
         self.panel = panel
 
@@ -341,6 +361,17 @@ private final class FloatControls: NSView {
         progressBar.frame = NSRect(x: 0, y: 0, width: bounds.width * CGFloat(clamped), height: 3)
     }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let view = super.hitTest(point)
+        for btn in buttons {
+            let ptInBtn = btn.convert(point, from: self)
+            if btn.bounds.contains(ptInBtn) && btn.alphaValue > 0.05 {
+                return btn
+            }
+        }
+        return view === self ? nil : view
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
@@ -377,18 +408,31 @@ private final class FloatControls: NSView {
 private enum IsolateScript {
     static let on = """
     (function () {
-      var videos = document.querySelectorAll('video');
-      var best = null, area = 0;
-      for (var i = 0; i < videos.length; i++) {
-        var v = videos[i];
-        if (v.paused || v.ended || v.readyState < 2) continue;
-        var box = v.getBoundingClientRect();
-        if (box.width * box.height >= area) { area = box.width * box.height; best = v; }
-      }
-      if (!best && videos.length > 0) {
-        best = videos[0];
+      var best = document.querySelector('video.html5-main-video') ||
+                 document.querySelector('video.video-stream');
+      if (!best || best.ended) {
+        var videos = document.querySelectorAll('video');
+        var area = 0;
+        for (var i = 0; i < videos.length; i++) {
+          var v = videos[i];
+          if (v.paused || v.ended || v.readyState < 1) continue;
+          var box = v.getBoundingClientRect();
+          if (box.width * box.height >= area) { area = box.width * box.height; best = v; }
+        }
+        if (!best) {
+          area = 0;
+          for (var i = 0; i < videos.length; i++) {
+            var v = videos[i];
+            if (v.ended) continue;
+            var box = v.getBoundingClientRect();
+            if (box.width * box.height >= area) { area = box.width * box.height; best = v; }
+          }
+        }
       }
       if (!best) return 'none';
+
+      window.__nomadFloatScroll = { x: window.scrollX, y: window.scrollY };
+      window.scrollTo(0, 0);
 
       window.__nomadFloatLanding = null;
       best.setAttribute('data-nomad-float', '');
@@ -400,50 +444,97 @@ private enum IsolateScript {
       }
       sheet.textContent = [
         'html.nomad-floating, html.nomad-floating body {',
-        'background:#000 !important; overflow:hidden !important; margin:0 !important}',
-        'html.nomad-floating body > *:not(:has([data-nomad-float])) { visibility:hidden !important; display:none !important }',
+        '  background: #000 !important;',
+        '  overflow: hidden !important;',
+        '  margin: 0 !important;',
+        '  padding: 0 !important;',
+        '  width: 100vw !important;',
+        '  height: 100vh !important;',
+        '}',
+        'html.nomad-floating * {',
+        '  visibility: hidden !important;',
+        '}',
+        'html.nomad-floating :has([data-nomad-float]) {',
+        '  overflow: visible !important;',
+        '  transform: none !important;',
+        '  translate: none !important;',
+        '  rotate: none !important;',
+        '  scale: none !important;',
+        '  filter: none !important;',
+        '  backdrop-filter: none !important;',
+        '  -webkit-backdrop-filter: none !important;',
+        '  perspective: none !important;',
+        '  contain: none !important;',
+        '  container-type: normal !important;',
+        '  will-change: auto !important;',
+        '  clip-path: none !important;',
+        '  mask: none !important;',
+        '  -webkit-mask: none !important;',
+        '  background: transparent !important;',
+        '  border: none !important;',
+        '}',
         'html.nomad-floating [data-nomad-float] {',
-        'visibility:visible !important; position:fixed !important;',
-        'left:0 !important; top:0 !important; right:0 !important; bottom:0 !important;',
-        'width:100vw !important; height:100vh !important;',
-        'max-width:none !important; max-height:none !important;',
-        'transform:none !important; translate:none !important; rotate:none !important; scale:none !important;',
-        'opacity:1 !important; object-fit:contain !important; z-index:2147483647 !important}',
-        'html.nomad-floating [data-nomad-float] ~ .player-timedtext,',
-        'html.nomad-floating :has(> [data-nomad-float]) > .player-timedtext,',
-        'html.nomad-floating :has([data-nomad-float]) > .player-timedtext {',
-        'visibility:visible !important; z-index:2147483647 !important}',
-        'html.nomad-floating body :has([data-nomad-float]) {',
-        'visibility:visible !important; overflow:visible !important; background:transparent !important; border:none !important;',
-        'transform:none !important; translate:none !important; rotate:none !important; scale:none !important;',
-        'filter:none !important; backdrop-filter:none !important; -webkit-backdrop-filter:none !important;',
-        'perspective:none !important; contain:none !important; container-type:normal !important;',
-        'will-change:auto !important; content-visibility:visible !important;',
-        'clip-path:none !important; mask:none !important; -webkit-mask:none !important;',
-        'opacity:1 !important}',
+        '  visibility: visible !important;',
+        '  position: fixed !important;',
+        '  left: 0 !important;',
+        '  top: 0 !important;',
+        '  right: 0 !important;',
+        '  bottom: 0 !important;',
+        '  width: 100vw !important;',
+        '  height: 100vh !important;',
+        '  max-width: 100vw !important;',
+        '  max-height: 100vh !important;',
+        '  min-width: 100vw !important;',
+        '  min-height: 100vh !important;',
+        '  margin: 0 !important;',
+        '  padding: 0 !important;',
+        '  border: none !important;',
+        '  transform: none !important;',
+        '  translate: none !important;',
+        '  rotate: none !important;',
+        '  scale: none !important;',
+        '  opacity: 1 !important;',
+        '  object-fit: contain !important;',
+        '  z-index: 2147483647 !important;',
+        '}',
+        'html.nomad-floating .player-timedtext,',
+        'html.nomad-floating .ytp-caption-window-bottom,',
+        'html.nomad-floating .caption-window {',
+        '  visibility: visible !important;',
+        '  z-index: 2147483647 !important;',
+        '}',
         'html.nomad-floating [data-nomad-float]::-webkit-media-controls {',
-        'display:none !important}'
-      ].join('');
+        '  display: none !important;',
+        '}'
+      ].join('\\n');
       document.documentElement.classList.add('nomad-floating');
 
       clearInterval(window.__nomadFloatWatch);
       window.__nomadFloatWatch = setInterval(function () {
         if (document.querySelector('[data-nomad-float]')) return;
-        var again = null, most = 0;
-        var all = document.querySelectorAll('video');
-        for (var j = 0; j < all.length; j++) {
-          var one = all[j];
-          if (one.paused || one.ended || one.readyState < 2) continue;
-          var shape = one.getBoundingClientRect();
-          if (shape.width * shape.height >= most) {
-            most = shape.width * shape.height;
-            again = one;
+        var again = document.querySelector('video.html5-main-video') ||
+                    document.querySelector('video.video-stream');
+        if (!again) {
+          var all = document.querySelectorAll('video');
+          var most = 0;
+          for (var j = 0; j < all.length; j++) {
+            var one = all[j];
+            if (one.ended) continue;
+            var shape = one.getBoundingClientRect();
+            if (shape.width * shape.height >= most) {
+              most = shape.width * shape.height;
+              again = one;
+            }
           }
         }
         if (again) again.setAttribute('data-nomad-float', '');
       }, 250);
 
-      return 'floating';
+      return JSON.stringify({
+        status: 'floating',
+        width: best.videoWidth || 16,
+        height: best.videoHeight || 9
+      });
     })();
     """
 
@@ -461,6 +552,10 @@ private enum IsolateScript {
         if (sheet) sheet.textContent = '';
         var video = document.querySelector('[data-nomad-float]');
         if (video) video.removeAttribute('data-nomad-float');
+        if (window.__nomadFloatScroll) {
+          window.scrollTo(window.__nomadFloatScroll.x, window.__nomadFloatScroll.y);
+          window.__nomadFloatScroll = null;
+        }
       }
       put();
       return 'landed';

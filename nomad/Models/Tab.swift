@@ -560,10 +560,15 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     func startElementZapper() {
         guard !isInternalPage && !isBlank else { return }
         isZapperActive = true
+        NSCursor.crosshair.set()
         let script = """
         (function() {
-            if (window.__nomad_zapper_active) return;
+            if (typeof window.__nomad_zapper_cleanup === 'function') {
+                window.__nomad_zapper_cleanup();
+            }
             window.__nomad_zapper_active = true;
+            document.documentElement.style.cursor = 'crosshair';
+
             let overlay = document.getElementById('__nomad_zap_overlay');
             if (!overlay) {
                 overlay = document.createElement('div');
@@ -575,11 +580,19 @@ final class Tab: NSObject, Identifiable, ObservableObject {
                 overlay.style.zIndex = '2147483647';
                 overlay.style.transition = 'all 0.05s ease';
                 overlay.style.borderRadius = '3px';
-                document.body.appendChild(overlay);
+                (document.body || document.documentElement).appendChild(overlay);
             }
             overlay.style.display = 'none';
 
             function onMouseMove(e) {
+                if (!window.__nomad_zapper_active) return;
+                const isOverBar = (e.clientY < 65 && Math.abs(e.clientX - window.innerWidth / 2) < 250);
+                if (isOverBar) {
+                    overlay.style.display = 'none';
+                    document.documentElement.style.cursor = 'default';
+                    return;
+                }
+                document.documentElement.style.cursor = 'crosshair';
                 const el = document.elementFromPoint(e.clientX, e.clientY);
                 if (!el || el === overlay) return;
                 const rect = el.getBoundingClientRect();
@@ -592,13 +605,27 @@ final class Tab: NSObject, Identifiable, ObservableObject {
 
             function cleanup() {
                 window.__nomad_zapper_active = false;
+                window.__nomad_zapper_cleanup = null;
+                document.documentElement.style.cursor = '';
+                window.removeEventListener('mousemove', onMouseMove, true);
                 document.removeEventListener('mousemove', onMouseMove, true);
+                window.removeEventListener('click', onClick, true);
                 document.removeEventListener('click', onClick, true);
+                window.removeEventListener('keydown', onKeyDown, true);
                 document.removeEventListener('keydown', onKeyDown, true);
-                if (overlay) overlay.style.display = 'none';
+                const ov = document.getElementById('__nomad_zap_overlay');
+                if (ov) {
+                    ov.style.display = 'none';
+                    ov.remove();
+                }
             }
+            window.__nomad_zapper_cleanup = cleanup;
 
             function onClick(e) {
+                if (!window.__nomad_zapper_active) return;
+                if (e.clientY < 65 && Math.abs(e.clientX - window.innerWidth / 2) < 250) {
+                    return;
+                }
                 e.preventDefault();
                 e.stopPropagation();
                 const el = document.elementFromPoint(e.clientX, e.clientY);
@@ -612,6 +639,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
                     }
                     el.setAttribute('data-nomad-zapped', 'true');
                     el.style.setProperty('display', 'none', 'important');
+                    overlay.style.display = 'none';
                     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nomadZapper) {
                         window.webkit.messageHandlers.nomadZapper.postMessage({
                             host: window.location.host,
@@ -619,11 +647,13 @@ final class Tab: NSObject, Identifiable, ObservableObject {
                         });
                     }
                 }
-                cleanup();
             }
 
             function onKeyDown(e) {
-                if (e.key === 'Escape') {
+                if (!window.__nomad_zapper_active) return;
+                if (e.key === 'Escape' || e.keyCode === 27 || e.which === 27) {
+                    e.preventDefault();
+                    e.stopPropagation();
                     cleanup();
                     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nomadZapper) {
                         window.webkit.messageHandlers.nomadZapper.postMessage({ cancel: true });
@@ -631,8 +661,11 @@ final class Tab: NSObject, Identifiable, ObservableObject {
                 }
             }
 
+            window.addEventListener('mousemove', onMouseMove, true);
             document.addEventListener('mousemove', onMouseMove, true);
+            window.addEventListener('click', onClick, true);
             document.addEventListener('click', onClick, true);
+            window.addEventListener('keydown', onKeyDown, true);
             document.addEventListener('keydown', onKeyDown, true);
         })();
         """
@@ -641,11 +674,20 @@ final class Tab: NSObject, Identifiable, ObservableObject {
 
     func stopElementZapper() {
         isZapperActive = false
+        objectWillChange.send()
+        NSCursor.arrow.set()
         let script = """
         (function() {
+            if (typeof window.__nomad_zapper_cleanup === 'function') {
+                window.__nomad_zapper_cleanup();
+            }
             window.__nomad_zapper_active = false;
+            document.documentElement.style.cursor = '';
             const overlay = document.getElementById('__nomad_zap_overlay');
-            if (overlay) overlay.style.display = 'none';
+            if (overlay) {
+                overlay.style.display = 'none';
+                overlay.remove();
+            }
         })();
         """
         webView.evaluateJavaScript(script, completionHandler: nil)
@@ -785,8 +827,10 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             }
             self.networkEntries.append(entry)
         } else if name == "nomadZapper", let dict = body as? [String: Any] {
-            self.isZapperActive = false
-            if dict["cancel"] as? Bool == true { return }
+            if dict["cancel"] as? Bool == true {
+                self.isZapperActive = false
+                return
+            }
             if let sel = dict["selector"] as? String, let host = dict["host"] as? String {
                 ZapperStore.shared.addSelector(sel, for: host)
             }

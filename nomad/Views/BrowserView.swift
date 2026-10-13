@@ -15,7 +15,7 @@ struct BrowserView: View {
     @State private var isCommandPaletteVisible: Bool = false
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             VStack(spacing: 0) {
                 // Top browser chrome (includes bottom progress bar overlay)
                 TopBarView(store: store, settings: settings)
@@ -59,6 +59,11 @@ struct BrowserView: View {
         .background(WindowVibrancyController(isVibrant: settings.isVibrant))
         .preferredColorScheme(settings.colorScheme)
         .tint(settings.accentColor)
+        .onExitCommand {
+            if let tab = store.activeTab, tab.isZapperActive {
+                tab.stopElementZapper()
+            }
+        }
         .background {
             // Native keyboard shortcuts
             Group {
@@ -157,6 +162,14 @@ struct BrowserView: View {
                     store.activeTab?.togglePictureInPicture()
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
+
+                // Element Zapper Done / Cancel (Esc)
+                Button("") {
+                    if let tab = store.activeTab, tab.isZapperActive {
+                        tab.stopElementZapper()
+                    }
+                }
+                .keyboardShortcut(.escape, modifiers: [])
             }
             .opacity(0)
             .allowsHitTesting(false)
@@ -227,52 +240,6 @@ private struct TabStageView: View {
                 .zIndex(150)
             }
 
-            // Element Zapper Mode Floating Banner (⌘⇧H)
-            if tab.isZapperActive {
-                let host = tab.url?.host ?? ""
-                let zappedCount = ZapperStore.shared.count(for: host)
-
-                HStack(spacing: 8) {
-                    Image(systemName: "bolt.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.red)
-                    Text("Element Zapper: Click any element to hide it.")
-                        .font(.system(size: 11, weight: .medium))
-
-                    if zappedCount > 0 {
-                        Text("(\(zappedCount) hidden)")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-
-                        Button("Unhide All") {
-                            tab.unhideAllZappedElements()
-                        }
-                        .font(.system(size: 10, weight: .semibold))
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                    }
-
-                    Spacer()
-
-                    Button("Done (Esc)") {
-                        tab.stopElementZapper()
-                    }
-                    .font(.system(size: 10, weight: .semibold))
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().stroke(Color.red.opacity(0.3), lineWidth: 1))
-                .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
-                .padding(.top, 10)
-                .frame(maxWidth: 480)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .zIndex(160)
-            }
-
             // Chrome/Arc-style Floating Swipe Gesture Indicator
             if let swipe = tab.swipeState {
                 SwipeIndicatorView(swipe: swipe, accentColor: settings.accentColor)
@@ -290,8 +257,25 @@ private struct TabStageView: View {
                         removal: .opacity
                     ))
             }
+
+            // Element Zapper Mode Floating Translucent Capsule Bar (⇧⌘H)
+            if tab.isZapperActive {
+                ZapperFloatingBar(tab: tab)
+                    .padding(.top, 14)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .opacity
+                    ))
+                    .zIndex(200)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onExitCommand {
+            if tab.isZapperActive {
+                tab.stopElementZapper()
+            }
+        }
     }
 }
 
@@ -592,6 +576,179 @@ final class ConfigNSView: NSView {
             window.backgroundColor = .windowBackgroundColor
         }
         window.invalidateShadow()
+    }
+}
+
+/// Sleek floating translucent capsule banner for Element Zapper mode (⇧⌘H)
+private struct ZapperFloatingBar: View {
+    @ObservedObject var tab: Tab
+    @ObservedObject var zapperStore = ZapperStore.shared
+    @State private var isDoneHovered: Bool = false
+    @State private var isUnhideHovered: Bool = false
+
+    var body: some View {
+        let host = tab.url?.host ?? ""
+        let zappedCount = zapperStore.count(for: host)
+
+        HStack(spacing: 10) {
+            // Accent icon badge
+            ZStack {
+                Circle()
+                    .fill(Color.red.opacity(0.16))
+                    .frame(width: 20, height: 20)
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color.red)
+            }
+
+            // Description text
+            HStack(spacing: 5) {
+                Text("Element Zapper")
+                    .font(.system(size: 11.5, weight: .semibold))
+                Text("— Click elements to hide")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            // Hidden count & Unhide All button
+            if zappedCount > 0 {
+                HStack(spacing: 4) {
+                    Text("\(zappedCount)")
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(.primary)
+                    Text("hidden")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2.5)
+                .background(Capsule().fill(Color.primary.opacity(0.08)))
+
+                Button(action: {
+                    tab.unhideAllZappedElements()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("Unhide All")
+                            .font(.system(size: 10.5, weight: .medium))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule()
+                            .fill(isUnhideHovered ? Color.primary.opacity(0.14) : Color.primary.opacity(0.08))
+                    )
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .systemCursor(.pointingHand)
+                .onHover { hovering in
+                    isUnhideHovered = hovering
+                    if hovering {
+                        NSCursor.pointingHand.set()
+                    } else {
+                        NSCursor.arrow.set()
+                    }
+                }
+            }
+
+            Divider()
+                .frame(height: 14)
+                .opacity(0.25)
+
+            // Done Button (Custom capsule pill, comfortable vertical padding, never chopped)
+            Button(action: {
+                tab.stopElementZapper()
+            }) {
+                HStack(spacing: 4) {
+                    Text("Done")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Esc")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .padding(.horizontal, 3.5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.white.opacity(0.25)))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4.5)
+                .background(
+                    Capsule()
+                        .fill(isDoneHovered ? Color.red.opacity(0.95) : Color.red.opacity(0.85))
+                        .shadow(color: Color.red.opacity(0.35), radius: 4, y: 1.5)
+                )
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .systemCursor(.pointingHand)
+            .keyboardShortcut(.escape, modifiers: [])
+            .onHover { hovering in
+                isDoneHovered = hovering
+                if hovering {
+                    NSCursor.pointingHand.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+            }
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 10)
+        .padding(.vertical, 6)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 6)
+                .shadow(color: .black.opacity(0.10), radius: 3, x: 0, y: 1)
+        )
+        .overlay(
+            Capsule()
+                .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
+        )
+        .systemCursor(.arrow)
+        .onHover { hovering in
+            if hovering {
+                NSCursor.arrow.set()
+            } else {
+                NSCursor.crosshair.set()
+            }
+        }
+        .onExitCommand {
+            tab.stopElementZapper()
+        }
+    }
+}
+
+/// AppKit cursor rect provider for SwiftUI views on macOS.
+private struct CursorRectView: NSViewRepresentable {
+    let cursor: NSCursor
+
+    func makeNSView(context: Context) -> CursorNSView {
+        let view = CursorNSView()
+        view.cursor = cursor
+        return view
+    }
+
+    func updateNSView(_ nsView: CursorNSView, context: Context) {
+        if nsView.cursor !== cursor {
+            nsView.cursor = cursor
+            nsView.window?.invalidateCursorRects(for: nsView)
+        }
+    }
+}
+
+private final class CursorNSView: NSView {
+    var cursor: NSCursor = .arrow
+
+    override func resetCursorRects() {
+        discardCursorRects()
+        addCursorRect(bounds, cursor: cursor)
+    }
+}
+
+private extension View {
+    func systemCursor(_ cursor: NSCursor) -> some View {
+        background(CursorRectView(cursor: cursor))
     }
 }
 
