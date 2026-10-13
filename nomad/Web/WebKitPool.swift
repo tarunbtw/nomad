@@ -41,8 +41,9 @@ enum WebKitPool {
         // Automatically upgrade known hosts to HTTPS
         config.upgradeKnownHostsToHTTPS = true
         
-        // User content controller for script message handlers and future extensions
-        let ucc = WKUserContentController()
+        // Use the configuration's userContentController directly so WebExtensions stay bound
+        let ucc = config.userContentController
+        ContentBlockerService.shared.attach(to: ucc)
         
         // Suppress horizontal elastic overscroll bounce and ensure GitHub avatars render as 1:1 circles
         let globalFixes = """
@@ -186,8 +187,6 @@ enum WebKitPool {
         })();
         """
         ucc.addUserScript(WKUserScript(source: networkInterceptor, injectionTime: .atDocumentStart, forMainFrameOnly: false))
-        
-        config.userContentController = ucc
 
         return config
     }

@@ -87,6 +87,10 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     // MARK: - Developer Drawer & Live Inspection State
     @Published var isDevDrawerVisible: Bool = false
     @Published var isInspectorActive: Bool = false
+    @Published var isZapperActive: Bool = false
+    @Published var isReaderModeActive: Bool = false
+    @Published var isFloatingVideo: Bool = false
+    @Published var readerArticle: ReaderArticle? = nil
     @Published var consoleEntries: [ConsoleEntry] = []
     @Published var networkEntries: [NetworkEntry] = []
     @Published var inspectedElementInfo: InspectedElementInfo? = nil
@@ -189,9 +193,11 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         ucc.removeScriptMessageHandler(forName: "nomadConsole")
         ucc.removeScriptMessageHandler(forName: "nomadInspect")
         ucc.removeScriptMessageHandler(forName: "nomadNetwork")
+        ucc.removeScriptMessageHandler(forName: "nomadZapper")
         ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadConsole")
         ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadInspect")
         ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadNetwork")
+        ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadZapper")
 
         setupObservers()
         
@@ -247,11 +253,13 @@ final class Tab: NSObject, Identifiable, ObservableObject {
 
     /// Tear down observers and script handlers when tab is explicitly closed
     func cleanup() {
+        FloatingVideoManager.shared.landIfTab(id: id)
         observers.forEach { $0.invalidate() }
         observers.removeAll()
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nomadConsole")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nomadInspect")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nomadNetwork")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "nomadZapper")
     }
 
     deinit {
@@ -539,6 +547,195 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         webView.evaluateJavaScript(script, completionHandler: nil)
     }
 
+    // MARK: - Element Zapper (Hide Anything ⇧⌘H)
+    func toggleElementZapper() {
+        guard !isInternalPage && !isBlank else { return }
+        if isZapperActive {
+            stopElementZapper()
+        } else {
+            startElementZapper()
+        }
+    }
+
+    func startElementZapper() {
+        guard !isInternalPage && !isBlank else { return }
+        isZapperActive = true
+        let script = """
+        (function() {
+            if (window.__nomad_zapper_active) return;
+            window.__nomad_zapper_active = true;
+            let overlay = document.getElementById('__nomad_zap_overlay');
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = '__nomad_zap_overlay';
+                overlay.style.position = 'fixed';
+                overlay.style.pointerEvents = 'none';
+                overlay.style.border = '2px dashed #ff3b30';
+                overlay.style.backgroundColor = 'rgba(255, 59, 48, 0.18)';
+                overlay.style.zIndex = '2147483647';
+                overlay.style.transition = 'all 0.05s ease';
+                overlay.style.borderRadius = '3px';
+                document.body.appendChild(overlay);
+            }
+            overlay.style.display = 'none';
+
+            function onMouseMove(e) {
+                const el = document.elementFromPoint(e.clientX, e.clientY);
+                if (!el || el === overlay) return;
+                const rect = el.getBoundingClientRect();
+                overlay.style.left = rect.left + 'px';
+                overlay.style.top = rect.top + 'px';
+                overlay.style.width = rect.width + 'px';
+                overlay.style.height = rect.height + 'px';
+                overlay.style.display = 'block';
+            }
+
+            function cleanup() {
+                window.__nomad_zapper_active = false;
+                document.removeEventListener('mousemove', onMouseMove, true);
+                document.removeEventListener('click', onClick, true);
+                document.removeEventListener('keydown', onKeyDown, true);
+                if (overlay) overlay.style.display = 'none';
+            }
+
+            function onClick(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                const el = document.elementFromPoint(e.clientX, e.clientY);
+                if (el && el !== overlay) {
+                    let sel = el.tagName.toLowerCase();
+                    if (el.id) {
+                        sel += '#' + el.id;
+                    } else if (el.className && typeof el.className === 'string') {
+                        const cls = el.className.trim().split(/\\s+/).filter(Boolean).slice(0, 2).join('.');
+                        if (cls) sel += '.' + cls;
+                    }
+                    el.setAttribute('data-nomad-zapped', 'true');
+                    el.style.setProperty('display', 'none', 'important');
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nomadZapper) {
+                        window.webkit.messageHandlers.nomadZapper.postMessage({
+                            host: window.location.host,
+                            selector: sel
+                        });
+                    }
+                }
+                cleanup();
+            }
+
+            function onKeyDown(e) {
+                if (e.key === 'Escape') {
+                    cleanup();
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nomadZapper) {
+                        window.webkit.messageHandlers.nomadZapper.postMessage({ cancel: true });
+                    }
+                }
+            }
+
+            document.addEventListener('mousemove', onMouseMove, true);
+            document.addEventListener('click', onClick, true);
+            document.addEventListener('keydown', onKeyDown, true);
+        })();
+        """
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    func stopElementZapper() {
+        isZapperActive = false
+        let script = """
+        (function() {
+            window.__nomad_zapper_active = false;
+            const overlay = document.getElementById('__nomad_zap_overlay');
+            if (overlay) overlay.style.display = 'none';
+        })();
+        """
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    /// Clears all zapped selectors for current host and restores hidden elements on the page immediately
+    func unhideAllZappedElements() {
+        guard let host = url?.host ?? webView.url?.host else { return }
+        ZapperStore.shared.clearSelectors(for: host)
+        let script = """
+        (function() {
+            const s = document.getElementById('nomad-zapped-rules');
+            if (s) s.remove();
+            document.querySelectorAll('[data-nomad-zapped="true"]').forEach(el => {
+                el.style.removeProperty('display');
+                el.removeAttribute('data-nomad-zapped');
+            });
+        })();
+        """
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    // MARK: - Reading Mode (⇧⌘R)
+    func toggleReaderMode() {
+        if isReaderModeActive {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                self.isReaderModeActive = false
+                self.readerArticle = nil
+            }
+            return
+        }
+        guard !isInternalPage && !isBlank else { return }
+
+        let script = """
+        (function() {
+            const title = document.querySelector('h1')?.innerText || document.title || 'Untitled';
+            const bylineEl = document.querySelector('[rel="author"], .byline, .author, time, .date');
+            const byline = bylineEl ? bylineEl.innerText.trim() : '';
+            const siteName = document.querySelector('meta[property="og:site_name"]')?.content || window.location.hostname;
+
+            const candidate = document.querySelector('article, [role="article"], main, .article-body, .post-content') || document.body;
+            const pEls = Array.from(candidate.querySelectorAll('p'));
+            const paragraphs = pEls
+                .map(p => p.innerText.trim())
+                .filter(t => t.length > 35 && !t.includes('Cookie') && !t.includes('Privacy Policy'));
+
+            const totalWords = paragraphs.reduce((sum, p) => sum + p.split(/\\s+/).length, 0);
+            const readingTime = Math.max(1, Math.round(totalWords / 200));
+
+            return {
+                title: title,
+                byline: byline,
+                siteName: siteName,
+                paragraphs: paragraphs,
+                wordCount: totalWords,
+                readingTime: readingTime
+            };
+        })();
+        """
+        webView.evaluateJavaScript(script) { [weak self] result, error in
+            guard let self = self, let dict = result as? [String: Any] else { return }
+            let title = dict["title"] as? String ?? self.title
+            let byline = dict["byline"] as? String ?? ""
+            let siteName = dict["siteName"] as? String ?? (self.url?.host ?? "")
+            let paragraphs = dict["paragraphs"] as? [String] ?? []
+            let wordCount = dict["wordCount"] as? Int ?? 0
+            let readingTime = dict["readingTime"] as? Int ?? 1
+
+            guard !paragraphs.isEmpty else { return }
+
+            self.readerArticle = ReaderArticle(
+                title: title,
+                byline: byline,
+                siteName: siteName,
+                paragraphs: paragraphs,
+                wordCount: wordCount,
+                readingTimeMinutes: readingTime,
+                url: self.url
+            )
+            withAnimation(.easeInOut(duration: 0.18)) {
+                self.isReaderModeActive = true
+            }
+        }
+    }
+
+    // MARK: - Picture-in-Picture (Floating Video ⇧⌘P)
+    func togglePictureInPicture() {
+        FloatingVideoManager.shared.toggle(tab: self)
+    }
+
     func handleScriptMessage(name: String, body: Any) {
         if name == "nomadConsole", let dict = body as? [String: Any] {
             let lvlStr = dict["level"] as? String ?? "log"
@@ -587,6 +784,12 @@ final class Tab: NSObject, Identifiable, ObservableObject {
                 self.networkEntries.removeFirst(50)
             }
             self.networkEntries.append(entry)
+        } else if name == "nomadZapper", let dict = body as? [String: Any] {
+            self.isZapperActive = false
+            if dict["cancel"] as? Bool == true { return }
+            if let sel = dict["selector"] as? String, let host = dict["host"] as? String {
+                ZapperStore.shared.addSelector(sel, for: host)
+            }
         }
     }
 
@@ -788,6 +991,25 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
             // Record visited page in HistoryStore (bypassed in Incognito mode)
             if !self.isIncognito {
                 HistoryStore.shared.addVisit(url: currentURL, title: self.title)
+            }
+
+            // Apply persistently zapped elements for this domain
+            if let host = currentURL.host {
+                let css = ZapperStore.shared.cssRule(for: host)
+                if !css.isEmpty {
+                    let injectScript = """
+                    (function() {
+                        let s = document.getElementById('nomad-zapped-rules');
+                        if (!s) {
+                            s = document.createElement('style');
+                            s.id = 'nomad-zapped-rules';
+                            document.head ? document.head.appendChild(s) : document.documentElement.appendChild(s);
+                        }
+                        s.textContent = `\(css)`;
+                    })();
+                    """
+                    webView.evaluateJavaScript(injectScript, completionHandler: nil)
+                }
             }
 
             let js = "document.querySelector(\"link[rel~='icon'], link[rel='shortcut icon']\")?.href || \"\""

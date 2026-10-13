@@ -12,26 +12,39 @@ import AppKit
 struct BrowserView: View {
     @ObservedObject var store: BrowserStore
     @StateObject private var settings = SettingsStore.shared
+    @State private var isCommandPaletteVisible: Bool = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Top browser chrome (includes bottom progress bar overlay)
-            TopBarView(store: store, settings: settings)
-                .frame(height: 50)
-                .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(1)
-                .zIndex(100)
+        ZStack {
+            VStack(spacing: 0) {
+                // Top browser chrome (includes bottom progress bar overlay)
+                TopBarView(store: store, settings: settings)
+                    .frame(height: 50)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+                    .zIndex(100)
 
-            // Tab Stage (observes activeTab directly with silky crossfade animation)
-            if let activeTab = store.activeTab {
-                TabStageView(store: store, tab: activeTab, settings: settings)
-                    .id(activeTab.id)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .zIndex(0)
-            } else {
-                Color.clear
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Tab Stage (observes activeTab directly with silky crossfade animation)
+                if let activeTab = store.activeTab {
+                    TabStageView(store: store, tab: activeTab, settings: settings)
+                        .id(activeTab.id)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                        .zIndex(0)
+                } else {
+                    Color.clear
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+
+            if isCommandPaletteVisible {
+                CommandPaletteView(store: store, settings: settings, onDismiss: {
+                    withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+                        isCommandPaletteVisible = false
+                    }
+                })
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                .zIndex(300)
             }
         }
         .background {
@@ -118,6 +131,32 @@ struct BrowserView: View {
                     }
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
+
+                // Command Palette (⌘K)
+                Button("") {
+                    withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+                        isCommandPaletteVisible.toggle()
+                    }
+                }
+                .keyboardShortcut("k", modifiers: .command)
+
+                // Element Zapper (⇧⌘H)
+                Button("") {
+                    store.activeTab?.toggleElementZapper()
+                }
+                .keyboardShortcut("h", modifiers: [.command, .shift])
+
+                // Reading Mode (⇧⌘R)
+                Button("") {
+                    store.activeTab?.toggleReaderMode()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+
+                // Floating Video / PiP (⇧⌘P)
+                Button("") {
+                    store.activeTab?.togglePictureInPicture()
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
             }
             .opacity(0)
             .allowsHitTesting(false)
@@ -141,6 +180,30 @@ private struct TabStageView: View {
                 // Calm empty start state when tab has no URL loaded
                 EmptyStateView(tab: tab, store: store, settings: settings)
                     .transition(.opacity)
+            } else if tab.isFloatingVideo {
+                VStack(spacing: 14) {
+                    Image(systemName: "pip.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(settings.accentColor)
+
+                    VStack(spacing: 4) {
+                        Text("Video is Playing in Floating Window")
+                            .font(.system(size: 15, weight: .semibold))
+                        Text("The video continues playing in a borderless window above other apps.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button("Return to Tab") {
+                        FloatingVideoManager.shared.land()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    .tint(settings.accentColor)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .windowBackgroundColor))
+                .transition(.opacity)
             } else {
                 VStack(spacing: 0) {
                     WebStage(tab: tab)
@@ -153,6 +216,61 @@ private struct TabStageView: View {
                 }
                 .animation(.spring(response: 0.26, dampingFraction: 0.86), value: tab.isDevDrawerVisible)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            // Distraction-Free Reading Mode (⌘⇧R)
+            if tab.isReaderModeActive, let article = tab.readerArticle {
+                ReaderView(article: article, onClose: {
+                    tab.toggleReaderMode()
+                })
+                .transition(.opacity)
+                .zIndex(150)
+            }
+
+            // Element Zapper Mode Floating Banner (⌘⇧H)
+            if tab.isZapperActive {
+                let host = tab.url?.host ?? ""
+                let zappedCount = ZapperStore.shared.count(for: host)
+
+                HStack(spacing: 8) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.red)
+                    Text("Element Zapper: Click any element to hide it.")
+                        .font(.system(size: 11, weight: .medium))
+
+                    if zappedCount > 0 {
+                        Text("(\(zappedCount) hidden)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+
+                        Button("Unhide All") {
+                            tab.unhideAllZappedElements()
+                        }
+                        .font(.system(size: 10, weight: .semibold))
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+
+                    Spacer()
+
+                    Button("Done (Esc)") {
+                        tab.stopElementZapper()
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(Color.red.opacity(0.3), lineWidth: 1))
+                .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                .padding(.top, 10)
+                .frame(maxWidth: 480)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(160)
             }
 
             // Chrome/Arc-style Floating Swipe Gesture Indicator

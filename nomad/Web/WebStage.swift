@@ -19,13 +19,20 @@ struct WebStage: NSViewRepresentable {
     }
 
     func updateNSView(_ hostView: StageHostView, context: Context) {
+        if tab?.isFloatingVideo == true {
+            if hostView.activeView?.superview === hostView {
+                hostView.activeView?.removeFromSuperview()
+            }
+            hostView.activeView = nil
+            return
+        }
         hostView.show(tab?.webView)
     }
 }
 
 /// AppKit container view that manages the active WKWebView subview with 1:1 pixel fidelity.
 final class StageHostView: NSView {
-    private weak var activeView: NSView?
+    var activeView: NSView?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -57,8 +64,10 @@ final class StageHostView: NSView {
             return
         }
 
-        // Remove currently displayed web view without destroying it
-        activeView?.removeFromSuperview()
+        // Remove currently displayed web view without destroying it, only if it is actually our subview
+        if let current = activeView, current.superview === self {
+            current.removeFromSuperview()
+        }
         activeView = newView
 
         // Mount the newly active web view with exact bounds matching

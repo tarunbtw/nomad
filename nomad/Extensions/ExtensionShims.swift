@@ -39,7 +39,7 @@ enum ExtensionShims {
     nonisolated static let stamp = ".nomad-shim"
     /// Raised when `prepare` changes what it does to a package, so that
     /// extensions prepared before are prepared again.
-    nonisolated private static let preparation = "3"
+    nonisolated private static let preparation = "4"
     nonisolated static let version: String = {
         SHA256.hash(data: Data((script + preparation).utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }()
@@ -2463,15 +2463,10 @@ enum ExtensionShims {
       // finds it, and falls back to that. An update that names no world gets
       // it too; in any other world the patch does nothing.
       if (scripting) {
-        const first = (scripts, updating) => Array.isArray(scripts) ? scripts.map((s) => {
-          if (!s || !Array.isArray(s.js) || s.js.includes("search-passkeys.js")) return s;
-          const world = String(s.world || "").toUpperCase();
-          return world === "MAIN" || (updating && !world) ? { ...s, js: ["search-passkeys.js", ...s.js] } : s;
-        }) : scripts;
         for (const name of ["registerContentScripts", "updateContentScripts"]) {
           const original = scripting[name];
           if (typeof original === "function") {
-            put(scripting, name, function (scripts, ...rest) { return original.call(scripting, first(scripts, name === "updateContentScripts"), ...rest); });
+            put(scripting, name, function (scripts, ...rest) { return original.call(scripting, scripts, ...rest); });
           }
         }
       }

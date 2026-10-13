@@ -130,6 +130,7 @@ struct NavigationControls: View {
 
             let canInspect = !tab.isBlank && !tab.isInternalPage
 
+
             Button(action: {
                 guard canInspect else { return }
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
