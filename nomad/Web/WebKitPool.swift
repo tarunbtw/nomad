@@ -45,7 +45,7 @@ enum WebKitPool {
         let ucc = config.userContentController
         ContentBlockerService.shared.attach(to: ucc)
         
-        // Suppress horizontal elastic overscroll bounce and ensure GitHub avatars render as 1:1 circles
+        // Suppress horizontal elastic overscroll bounce
         let globalFixes = """
         (function() {
             const s = document.createElement('style');
@@ -53,11 +53,6 @@ enum WebKitPool {
             s.textContent = `
                 html, body {
                     overscroll-behavior-x: none !important;
-                }
-                .avatar-user, .user-profile-mini-avatar img, img.avatar {
-                    aspect-ratio: 1 / 1 !important;
-                    border-radius: 50% !important;
-                    object-fit: cover !important;
                 }
             `;
             if (document.head) {

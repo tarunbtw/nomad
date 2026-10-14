@@ -162,14 +162,6 @@ struct BrowserView: View {
                     store.activeTab?.togglePictureInPicture()
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
-
-                // Element Zapper Done / Cancel (Esc)
-                Button("") {
-                    if let tab = store.activeTab, tab.isZapperActive {
-                        tab.stopElementZapper()
-                    }
-                }
-                .keyboardShortcut(.escape, modifiers: [])
             }
             .opacity(0)
             .allowsHitTesting(false)
@@ -271,11 +263,6 @@ private struct TabStageView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onExitCommand {
-            if tab.isZapperActive {
-                tab.stopElementZapper()
-            }
-        }
     }
 }
 
@@ -643,14 +630,7 @@ private struct ZapperFloatingBar: View {
                 }
                 .buttonStyle(.plain)
                 .systemCursor(.pointingHand)
-                .onHover { hovering in
-                    isUnhideHovered = hovering
-                    if hovering {
-                        NSCursor.pointingHand.set()
-                    } else {
-                        NSCursor.arrow.set()
-                    }
-                }
+                .onHover { isUnhideHovered = $0 }
             }
 
             Divider()
@@ -683,14 +663,7 @@ private struct ZapperFloatingBar: View {
             .buttonStyle(.plain)
             .systemCursor(.pointingHand)
             .keyboardShortcut(.escape, modifiers: [])
-            .onHover { hovering in
-                isDoneHovered = hovering
-                if hovering {
-                    NSCursor.pointingHand.set()
-                } else {
-                    NSCursor.arrow.set()
-                }
-            }
+            .onHover { isDoneHovered = $0 }
         }
         .padding(.leading, 10)
         .padding(.trailing, 10)
@@ -706,16 +679,6 @@ private struct ZapperFloatingBar: View {
                 .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
         )
         .systemCursor(.arrow)
-        .onHover { hovering in
-            if hovering {
-                NSCursor.arrow.set()
-            } else {
-                NSCursor.crosshair.set()
-            }
-        }
-        .onExitCommand {
-            tab.stopElementZapper()
-        }
     }
 }
 

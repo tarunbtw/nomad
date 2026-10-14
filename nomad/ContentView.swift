@@ -45,6 +45,3 @@ private struct WindowConfigurator: NSViewRepresentable {
     }
 }
 
-#Preview {
-    ContentView()
-}
