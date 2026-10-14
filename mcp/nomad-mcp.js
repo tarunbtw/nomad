@@ -143,7 +143,7 @@ const TOOLS = [
     },
     {
         name: 'nomad_snapshot',
-        description: 'Capture a token-optimized semantic perception tree (typically 200–1,200 tokens depending on page density, vs 50k–100k+ raw HTML). Extracts visible interactive elements across light and Shadow DOM with assigned IDs ([e1], [e2], ...), bounding coordinates, tag names, roles, accessible text, and occlusion states.',
+        description: 'Capture a token-optimized semantic perception tree (typically 200–1,200 tokens depending on page density, vs 50k–100k+ raw HTML). Extracts visible interactive elements, semantic headings (h1-h3), and images across light and Shadow DOM with assigned IDs ([e1], [e2], ...), bounding coordinates, tag names, roles, accessible text, image src URLs, and occlusion states.',
         inputSchema: {
             type: 'object',
             properties: {},

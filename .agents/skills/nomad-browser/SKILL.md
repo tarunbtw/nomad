@@ -92,6 +92,10 @@ nomad_screenshot({ "labeled": true })
 ```
 This renders numbered visual badges matching the snapshot references (`[1]`, `[2]`, ...) directly on the WebKit GPU frame before capturing the PNG, giving vision models exact pixel grounding.
 
+> [!TIP]
+> **Animated SPAs & Entrance Transitions (Framer, WebGL, Canvas):**
+> Modern landing pages (such as Framer or WebGL showcases) frequently utilize initial entrance fade-in animations (`opacity: 0 -> 1` over 500–1000ms). When observing such pages, call `nomad_wait({ mode: "timeout", durationMs: 1200 })` or wait for stability before capturing the reference screenshot, and visually inspect the frame before proceeding.
+
 ---
 
 ## Developer Drawer (In-App DevX)

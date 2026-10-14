@@ -40,6 +40,8 @@ struct NomadElement: Codable {
     var focused: Bool?
     var readOnly: Bool?
     var isInShadowRoot: Bool?
+    var src: String?
+    var alt: String?
 }
 
 /// Bounding rectangle in viewport coordinates.
@@ -206,7 +208,7 @@ enum NomadDOMScript {
                 // Recursive collector penetrating open Shadow DOM roots
                 function collectNodes(root, list) {
                     if (!root) return;
-                    var selector = 'a, button, input, textarea, select, details, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"], iframe';
+                    var selector = 'a, button, input, textarea, select, details, summary, h1, h2, h3, img, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [role="heading"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"], iframe';
                     try {
                         var found = root.querySelectorAll(selector);
                         for (var i = 0; i < found.length; i++) {
@@ -314,10 +316,23 @@ enum NomadDOMScript {
                     var role = el.getAttribute('role') || tag;
                     var type = el.getAttribute('type') || null;
                     var val = (el.value !== undefined && el.value !== '' && el.type !== 'password') ? String(el.value).substring(0, 50) : null;
+                    var isHeading = (tag === 'h1' || tag === 'h2' || tag === 'h3' || el.getAttribute('role') === 'heading');
+                    var isImg = (tag === 'img');
 
                     // Filter out meaningless whitespace links or empty non-interactive anchors
                     if ((tag === 'a' || tag === 'button') && !text && !val && !el.querySelector('img, svg')) {
                         continue;
+                    }
+                    if (isHeading && !text) {
+                        continue;
+                    }
+                    var src = isImg ? (el.currentSrc || el.src || el.getAttribute('src') || null) : null;
+                    var alt = isImg ? (el.alt || el.getAttribute('alt') || null) : null;
+                    if (isImg && !src && !alt) {
+                        continue;
+                    }
+                    if (isImg && !text && alt) {
+                        text = alt.substring(0, 80);
                     }
 
                     var id = 'e' + counter++;
@@ -367,6 +382,8 @@ enum NomadDOMScript {
                         focused: focused,
                         readOnly: readOnly,
                         isInShadowRoot: inShadow,
+                        src: src,
+                        alt: alt,
                         bounds: {
                             x: Math.round(rect.left),
                             y: Math.round(rect.top),
@@ -379,7 +396,7 @@ enum NomadDOMScript {
                 // Build compact markdown semantic summary for LLM prompt ingestion
                 var summaryLines = [
                     '[Page: ' + (document.title || 'Untitled') + ' | URL: ' + window.location.href + ']',
-                    'Interactive Elements (' + results.length + '):'
+                    'Semantic Elements (' + results.length + '):'
                 ];
 
                 for (var j = 0; j < results.length; j++) {
@@ -389,6 +406,7 @@ enum NomadDOMScript {
                     desc += ' <' + item.tag;
                     if (item.type) desc += ' type="' + item.type + '"';
                     if (item.role && item.role !== item.tag) desc += ' role="' + item.role + '"';
+                    if (item.src) desc += ' src="' + item.src + '"';
                     if (item.className) desc += ' class="' + item.className + '"';
                     if (item.text) desc += ' "' + item.text + '"';
                     if (item.value) desc += ' value="' + item.value + '"';
@@ -868,6 +886,18 @@ extension Tab {
     /// If `labeled` is true, temporary visual index badges are overlaid to ground Vision LLMs.
     @MainActor
     func captureScreenshot(labeled: Bool = false) async throws -> NSImage {
+        // Ensure pending layout, paint, and animation frames are flushed so WebKit doesn't snap a blank frame on SPAs/canvas
+        _ = try? await webView.evaluateJavaScript("""
+        new Promise(function(resolve) {
+            requestAnimationFrame(function() {
+                requestAnimationFrame(function() {
+                    if (document.body) { void document.body.offsetHeight; }
+                    resolve(true);
+                });
+            });
+        })
+        """)
+
         if labeled {
             _ = try? await webView.evaluateJavaScript(NomadDOMScript.core)
             _ = try? await webView.evaluateJavaScript("window.__nomad.getSemanticTree(); window.__nomad.showBadges();")
