@@ -95,7 +95,7 @@ enum WebKitPool {
             console.error = function(...args) { origError.apply(console, args); send('error', args); };
         })();
         """
-        ucc.addUserScript(WKUserScript(source: consoleInterceptor, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        ucc.addUserScript(WKUserScript(source: consoleInterceptor, injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
         // Capture fetch and XMLHttpRequest network activity for Nomad DevX Network Tab
         let networkInterceptor = """
@@ -181,7 +181,7 @@ enum WebKitPool {
             };
         })();
         """
-        ucc.addUserScript(WKUserScript(source: networkInterceptor, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        ucc.addUserScript(WKUserScript(source: networkInterceptor, injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
         return config
     }

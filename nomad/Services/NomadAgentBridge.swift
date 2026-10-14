@@ -265,29 +265,19 @@ enum NomadDOMScript {
                     }
                 }
 
-                // Extracts list ordinal index or rank (e.g. Hacker News, search results, ordered lists)
+                // Extracts list ordinal index or rank (search results, table rows, ordered lists)
                 function getItemRank(el) {
                     try {
-                        var row = el.closest('tr.athing') || el.closest('.athing');
-                        if (row) {
-                            var r = row.querySelector('.rank');
-                            if (r) {
-                                var num = (r.innerText || r.textContent || '').replace(/\\D/g, '');
-                                if (num) return num;
-                            }
+                        var item = el.closest('li, tr, article, [role="listitem"]');
+                        if (!item) return null;
+                        var r = item.querySelector('.rank, [class*="rank"], [class*="index"]');
+                        if (r) {
+                            var num = (r.innerText || r.textContent || '').replace(/\\D/g, '');
+                            if (num) return num;
                         }
-                        var li = el.closest('li');
-                        if (li && li.parentElement && li.parentElement.tagName === 'OL') {
-                            var idx = Array.prototype.indexOf.call(li.parentElement.children, li);
+                        if (item.tagName === 'LI' && item.parentElement && item.parentElement.tagName === 'OL') {
+                            var idx = Array.prototype.indexOf.call(item.parentElement.children, item);
                             if (idx >= 0) return String(idx + 1);
-                        }
-                        var container = el.closest('article') || el.closest('[role="article"]');
-                        if (container) {
-                            var rEl = container.querySelector('[class*="rank"], [class*="index"]');
-                            if (rEl) {
-                                var num2 = (rEl.innerText || rEl.textContent || '').replace(/\\D/g, '');
-                                if (num2) return num2;
-                            }
                         }
                     } catch(e) {}
                     return null;
@@ -441,49 +431,35 @@ enum NomadDOMScript {
                 var el = null;
 
                 if (targetId) {
-                    if (this.elements && this.elements[targetId]) {
+                    if (this.elements && this.elements[targetId] && document.contains(this.elements[targetId])) {
                         el = this.elements[targetId];
-                        // Auto-recover if node was detached during React/DOM re-render
-                        if (!document.contains(el)) {
-                            var recheck = document.querySelector('[data-nomad-id="' + targetId + '"]');
-                            if (recheck) {
-                                el = recheck;
-                                this.elements[targetId] = recheck;
-                            } else if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
-                                el = document.activeElement;
-                                this.elements[targetId] = el;
-                                try { el.setAttribute('data-nomad-id', targetId); } catch(e) {}
-                            }
-                        }
                     } else {
                         try {
-                            el = document.querySelector('[data-nomad-id="' + targetId + '"]');
+                            el = document.querySelector('[data-nomad-id="' + targetId + '"]') || document.querySelector(targetId);
+                            if (el && this.elements) this.elements[targetId] = el;
                         } catch(e) {}
-                        if (!el) {
-                            try {
-                                el = document.querySelector(targetId);
-                            } catch(e) {}
-                        }
+
                         if (!el && document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
                             el = document.activeElement;
                         }
+
                         if (!el) {
-                            function findInShadow(root) {
+                            function scanShadow(root) {
                                 if (!root) return null;
                                 var all = root.querySelectorAll('*');
                                 for (var s = 0; s < all.length; s++) {
                                     if (all[s].shadowRoot) {
                                         try {
-                                            var found = all[s].shadowRoot.querySelector(targetId);
+                                            var found = all[s].shadowRoot.querySelector(targetId) || all[s].shadowRoot.querySelector('[data-nomad-id="' + targetId + '"]');
                                             if (found) return found;
                                         } catch(e) {}
-                                        var deeper = findInShadow(all[s].shadowRoot);
+                                        var deeper = scanShadow(all[s].shadowRoot);
                                         if (deeper) return deeper;
                                     }
                                 }
                                 return null;
                             }
-                            try { el = findInShadow(document); } catch(e) {}
+                            try { el = scanShadow(document); } catch(e) {}
                         }
                     }
                 }
@@ -501,35 +477,27 @@ enum NomadDOMScript {
                             // If el is a label, delegate directly to its associated form control
                             if (el.tagName === 'LABEL') {
                                 var targetInput = el.htmlFor ? document.getElementById(el.htmlFor) : el.querySelector('input, select, textarea');
-                                if (targetInput) {
-                                    el = targetInput;
-                                }
+                                if (targetInput) el = targetInput;
                             }
 
-                            // For checkboxes and radios: calling native el.click() cleanly toggles state and fires change/input
-                            if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
-                                el.click();
-                                return { success: true, message: 'Clicked ' + (targetId || 'checkbox'), elementId: targetId };
-                            }
-
-                            // Trigger native DOM click for default behavior
-                            try { el.click(); } catch(e) {}
-
+                            // Pointer and mouse event simulation sequence
                             var pdown = new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window });
                             var mdown = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window });
                             var pup = new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window });
                             var mup = new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window });
-                            var clk = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
 
                             el.dispatchEvent(pdown);
                             el.dispatchEvent(mdown);
                             el.dispatchEvent(pup);
                             el.dispatchEvent(mup);
-                            el.dispatchEvent(clk);
 
-                            if (el.tagName === 'A' && el.href && !el.href.startsWith('javascript:')) {
-                                window.location.href = el.href;
+                            // Native click triggers standard activation behavior (checkboxes, buttons, navigation)
+                            try {
+                                el.click();
+                            } catch(e) {
+                                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
                             }
+
                             return { success: true, message: 'Clicked ' + (targetId || 'element'), elementId: targetId };
                         } else if (actionObj.x !== undefined && actionObj.y !== undefined) {
                             var hit = document.elementFromPoint(actionObj.x, actionObj.y);
@@ -729,13 +697,8 @@ enum NomadDOMScript {
                 this.hideBadges();
                 var container = document.createElement('div');
                 container.id = '__nomad_badges_layer';
-                container.style.position = 'fixed';
-                container.style.top = '0';
-                container.style.left = '0';
-                container.style.width = '100vw';
-                container.style.height = '100vh';
-                container.style.pointerEvents = 'none';
-                container.style.zIndex = '2147483647';
+                container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;';
+                container.innerHTML = '<style>.__nb{position:fixed;background:#FF5500;color:#fff;font:bold 10px monospace;padding:1px 3px;border-radius:3px;box-shadow:0 1px 3px rgba(0,0,0,0.4);}</style>';
 
                 for (var id in this.elements) {
                     var el = this.elements[id];
@@ -743,18 +706,10 @@ enum NomadDOMScript {
                     if (rect.width <= 0 || rect.height <= 0) continue;
 
                     var badge = document.createElement('span');
+                    badge.className = '__nb';
                     badge.textContent = id;
-                    badge.style.position = 'fixed';
                     badge.style.left = Math.max(0, rect.left) + 'px';
                     badge.style.top = Math.max(0, rect.top - 12) + 'px';
-                    badge.style.background = '#FF5500';
-                    badge.style.color = '#FFFFFF';
-                    badge.style.fontSize = '10px';
-                    badge.style.fontWeight = 'bold';
-                    badge.style.fontFamily = 'monospace';
-                    badge.style.padding = '1px 3px';
-                    badge.style.borderRadius = '3px';
-                    badge.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)';
                     container.appendChild(badge);
                 }
                 document.body.appendChild(container);
@@ -815,11 +770,19 @@ enum NomadDOMScript {
 // MARK: - Native Tab Agent Extensions
 
 extension Tab {
+    /// Injects NomadDOMScript only if window.__nomad is not already initialized.
+    @MainActor
+    func ensureNomadScriptInjected() async {
+        let isLoaded = (try? await webView.evaluateJavaScript("Boolean(window.__nomad)")) as? Bool ?? false
+        if !isLoaded {
+            _ = try? await webView.evaluateJavaScript(NomadDOMScript.core)
+        }
+    }
+
     /// Extracts a dense, token-efficient semantic tree and element index from the active page.
     @MainActor
     func getSemanticTree() async throws -> NomadSnapshot {
-        // Ensure core script is injected
-        _ = try await webView.evaluateJavaScript(NomadDOMScript.core)
+        await ensureNomadScriptInjected()
         let jsonString = try await webView.evaluateJavaScript("JSON.stringify(window.__nomad.getSemanticTree())") as? String ?? "{}"
         guard let data = jsonString.data(using: .utf8) else {
             throw NSError(domain: "NomadAgent", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse snapshot JSON"])
@@ -830,7 +793,7 @@ extension Tab {
     /// Dispatches a browser action (click, hover, type, clear, scroll, keypress, select, highlight) on the active page.
     @MainActor
     func performAction(_ action: NomadAction) async throws -> NomadActionResult {
-        _ = try await webView.evaluateJavaScript(NomadDOMScript.core)
+        await ensureNomadScriptInjected()
         let actionData = try JSONEncoder().encode(action)
         guard let actionJSON = String(data: actionData, encoding: .utf8) else {
             throw NSError(domain: "NomadAgent", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to encode action JSON"])
@@ -850,7 +813,7 @@ extension Tab {
         while webView.isLoading && Date().timeIntervalSince(start) < (Double(timeoutMs) / 1000.0) {
             try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
         }
-        _ = try? await webView.evaluateJavaScript(NomadDOMScript.core)
+        await ensureNomadScriptInjected()
         let script = """
         if (!window.__nomad || !window.__nomad.waitForStability) {
             return { success: true, message: 'DOM ready' };
@@ -899,7 +862,7 @@ extension Tab {
         """)
 
         if labeled {
-            _ = try? await webView.evaluateJavaScript(NomadDOMScript.core)
+            await ensureNomadScriptInjected()
             _ = try? await webView.evaluateJavaScript("window.__nomad.getSemanticTree(); window.__nomad.showBadges();")
         }
 

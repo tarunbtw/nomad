@@ -17,8 +17,16 @@ import WebKit
 final class NomadAgentServer: ObservableObject {
     static let shared = NomadAgentServer()
 
+    static var defaultPort: UInt16 {
+        if let envStr = ProcessInfo.processInfo.environment["NOMAD_AGENT_PORT"],
+           let p = UInt16(envStr) {
+            return p
+        }
+        return 9222
+    }
+
     @Published private(set) var isRunning: Bool = false
-    @Published private(set) var port: UInt16 = 9222
+    @Published private(set) var port: UInt16 = NomadAgentServer.defaultPort
     @Published private(set) var requestCount: Int = 0
 
     weak var store: BrowserStore?
@@ -28,14 +36,14 @@ final class NomadAgentServer: ObservableObject {
 
     private init() {}
 
-    /// Starts the local agent server on 127.0.0.1:9222.
+    /// Starts the local agent server (default: NOMAD_AGENT_PORT or 9222).
     @MainActor
-    func start(port: UInt16 = 9222, store: BrowserStore? = nil) {
+    func start(port: UInt16? = nil, store: BrowserStore? = nil) {
         if let store = store {
             self.store = store
         }
         guard !isRunning else { return }
-        self.port = port
+        self.port = port ?? Self.defaultPort
 
         do {
             let tcpOptions = NWProtocolTCP.Options()
@@ -44,8 +52,8 @@ final class NomadAgentServer: ObservableObject {
             params.allowLocalEndpointReuse = true
             params.requiredInterfaceType = .loopback
 
-            guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
-                print("⚠️ [NomadAgentServer] Invalid port: \(port)")
+            guard let endpointPort = NWEndpoint.Port(rawValue: self.port) else {
+                print("⚠️ [NomadAgentServer] Invalid port: \(self.port)")
                 return
             }
 
