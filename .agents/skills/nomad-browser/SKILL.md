@@ -82,7 +82,7 @@ Supported action types:
 - `clear`: Wipes input/textarea value and triggers change events.
 - `press`: Simulates key press or modifier chord (e.g. `text: "Enter"`, `text: "Meta+A"`, `text: "Shift+Tab"`).
 - `selectOption`: Chooses dropdown `<option>` by `optionValue` or `optionText`.
-- `scroll`: Scrolls the viewport by `scrollDeltaY` pixels (e.g. `300` to scroll down).
+- `scroll`: Scrolls the viewport by `scrollDeltaY` pixels (e.g. `300` to scroll down, `-300` to scroll up) or `scrollDeltaX`.
 - `highlight`: Briefly flashes an orange highlight box over the element for visual confirmation.
 
 ### 4. Vision Grounding (Multimodal Verification)

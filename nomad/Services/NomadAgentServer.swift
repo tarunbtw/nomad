@@ -251,12 +251,18 @@ final class NomadAgentServer: ObservableObject {
                 store.reload()
                 sendJSON(connection: connection, object: ["success": true, "action": "reload"])
             default:
-                guard let urlStr = json["url"] as? String, let url = URL(string: urlStr) else {
+                guard let urlStr = json["url"] as? String, let url = URL(string: urlStr), url.scheme != nil else {
                     sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing or invalid url in body\"}")
                     return
                 }
                 activeTab.load(url: url)
-                sendJSON(connection: connection, object: ["success": true, "navigatedTo": url.absoluteString])
+                // Brief pause to detect immediate provisional failure (e.g. invalid host / DNS resolution failure)
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                if let navError = activeTab.lastNavigationError {
+                    sendJSON(connection: connection, object: ["success": false, "error": navError, "navigatedTo": url.absoluteString])
+                } else {
+                    sendJSON(connection: connection, object: ["success": true, "navigatedTo": url.absoluteString])
+                }
             }
 
         case ("POST", "/navigate/back"):
@@ -284,15 +290,20 @@ final class NomadAgentServer: ObservableObject {
 
             if let bodyData = bodyData,
                let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
-                if let m = json["mode"] as? String { mode = m }
+                if let m = json["mode"] as? String { mode = m.lowercased() }
                 if let q = json["quietMs"] as? Int { quietMs = q }
                 if let t = json["timeoutMs"] as? Int { timeoutMs = t }
                 if let d = json["durationMs"] as? Int { durationMs = d }
                 if let s = json["selector"] as? String { selector = s }
             }
 
+            // Auto-infer selector mode if selector string is present
+            if !selector.isEmpty && (mode == "stability" || mode.isEmpty) {
+                mode = "selector"
+            }
+
             switch mode {
-            case "stability":
+            case "stability", "stable", "domstable", "idle", "quiescence":
                 do {
                     let result = try await activeTab.waitForStability(quietMs: quietMs, timeoutMs: timeoutMs)
                     sendJSON(connection: connection, object: result)
@@ -305,38 +316,44 @@ final class NomadAgentServer: ObservableObject {
                     sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing selector string\"}")
                     return
                 }
-                let escapedSel = selector.replacingOccurrences(of: "'", with: "\\'")
                 let script = """
-                (function() {
-                    return new Promise(function(resolve) {
-                        var sel = '\(escapedSel)';
+                return await new Promise(function(resolve) {
+                    var sel = selector;
+                    if (document.querySelector(sel)) {
+                        resolve({ success: true, message: 'Element already present' });
+                        return;
+                    }
+                    var timer = setTimeout(function() {
+                        obs.disconnect();
+                        resolve({ success: false, message: 'Timeout waiting for ' + sel });
+                    }, timeoutMs);
+                    var obs = new MutationObserver(function() {
                         if (document.querySelector(sel)) {
-                            resolve({ success: true, message: 'Element already present' });
-                            return;
-                        }
-                        var timer = setTimeout(function() {
+                            clearTimeout(timer);
                             obs.disconnect();
-                            resolve({ success: false, message: 'Timeout waiting for ' + sel });
-                        }, \(timeoutMs));
-                        var obs = new MutationObserver(function() {
-                            if (document.querySelector(sel)) {
-                                clearTimeout(timer);
-                                obs.disconnect();
-                                resolve({ success: true, message: 'Element appeared' });
-                            }
-                        });
-                        obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
+                            resolve({ success: true, message: 'Element appeared' });
+                        }
                     });
-                })()
+                    obs.observe(document.body || document.documentElement, { childList: true, subtree: true, attributes: true });
+                });
                 """
                 do {
-                    _ = try await activeTab.webView.evaluateJavaScript(script)
-                    sendJSON(connection: connection, object: ["success": true, "selector": selector])
+                    let result: [String: Any] = try await withCheckedThrowingContinuation { continuation in
+                        activeTab.webView.callAsyncJavaScript(script, arguments: ["selector": selector, "timeoutMs": timeoutMs], in: nil, in: .page) { res in
+                            switch res {
+                            case .success(let val):
+                                continuation.resume(returning: (val as? [String: Any]) ?? ["success": true, "selector": selector])
+                            case .failure(let err):
+                                continuation.resume(throwing: err)
+                            }
+                        }
+                    }
+                    sendJSON(connection: connection, object: result)
                 } catch {
                     sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}")
                 }
 
-            case "timeout":
+            case "timeout", "sleep", "delay":
                 try? await Task.sleep(nanoseconds: UInt64(durationMs) * 1_000_000)
                 sendJSON(connection: connection, object: ["success": true, "waitedMs": durationMs])
 
@@ -401,10 +418,13 @@ final class NomadAgentServer: ObservableObject {
                     .domain: domain,
                     .path: path
                 ]
-                if let sec = c["isSecure"] as? Bool, sec {
+                if let sec = (c["isSecure"] as? Bool) ?? (c["secure"] as? Bool), sec {
                     props[.secure] = "TRUE"
                 }
-                if let exp = c["expires"] as? Double {
+                if let httpOnly = (c["isHTTPOnly"] as? Bool) ?? (c["httpOnly"] as? Bool) ?? (c["isHttpOnly"] as? Bool), httpOnly {
+                    props[HTTPCookiePropertyKey(rawValue: "HttpOnly")] = "TRUE"
+                }
+                if let exp = (c["expires"] as? Double) ?? (c["expiry"] as? Double) {
                     props[.expires] = Date(timeIntervalSince1970: exp)
                 }
                 if let cookie = HTTPCookie(properties: props) {
@@ -444,12 +464,17 @@ final class NomadAgentServer: ObservableObject {
                 sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}")
             }
 
-        case ("GET", "/screenshot"):
+        case ("GET", "/screenshot"), ("POST", "/screenshot"):
             guard let activeTab = store.activeTab else {
                 sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}")
                 return
             }
-            let isLabeled = queryString.contains("labeled=true")
+            var isLabeled = queryString.contains("labeled=true")
+            if !isLabeled, let bodyData = bodyData,
+               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any],
+               let labeledBool = json["labeled"] as? Bool {
+                isLabeled = labeledBool
+            }
             do {
                 let image = try await activeTab.captureScreenshot(labeled: isLabeled)
                 if let png = image.pngData {
@@ -490,11 +515,47 @@ final class NomadAgentServer: ObservableObject {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing script string in body\"}")
                 return
             }
+            let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
+            let wrappedScript: String
+            if trimmed.starts(with: "return ") || trimmed.starts(with: "return\n") {
+                wrappedScript = trimmed
+            } else {
+                wrappedScript = """
+                try {
+                    return await (async () => (\(trimmed)))();
+                } catch(e) {
+                    return await (async () => { \(trimmed) })();
+                }
+                """
+            }
             do {
-                let result = try await activeTab.webView.evaluateJavaScript(script)
-                sendJSON(connection: connection, object: ["success": true, "result": "\(result ?? "")"])
+                let evalResult: Any? = try await withCheckedThrowingContinuation { continuation in
+                    activeTab.webView.callAsyncJavaScript(wrappedScript, arguments: [:], in: nil, in: .defaultClient) { result in
+                        switch result {
+                        case .success(let val):
+                            continuation.resume(returning: val)
+                        case .failure(let error):
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                }
+
+                var responseObj: [String: Any] = ["success": true]
+                if let val = evalResult {
+                    if JSONSerialization.isValidJSONObject([val]) || val is String || val is NSNumber || val is [Any] || val is [String: Any] {
+                        responseObj["result"] = val
+                    } else {
+                        responseObj["result"] = "\(val)"
+                    }
+                } else {
+                    responseObj["result"] = NSNull()
+                }
+                sendJSON(connection: connection, object: responseObj)
             } catch {
-                sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}")
+                let nsErr = error as NSError
+                let isCSP = nsErr.domain == "WKErrorDomain" && (nsErr.code == 4 || nsErr.localizedDescription.contains("Content Security Policy"))
+                let errCode = isCSP ? "EVAL_CSP" : "EVAL_ERROR"
+                sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\",\"code\":\"\(errCode)\",\"success\":false}")
             }
 
         default:

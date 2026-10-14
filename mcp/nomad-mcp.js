@@ -143,7 +143,7 @@ const TOOLS = [
     },
     {
         name: 'nomad_snapshot',
-        description: 'Capture a token-optimized semantic perception tree (~300 tokens vs 100k raw HTML). Extracts visible interactive elements across light and Shadow DOM with assigned IDs ([e1], [e2], ...), bounding coordinates, tag names, roles, accessible text, and occlusion states.',
+        description: 'Capture a token-optimized semantic perception tree (typically 200–1,200 tokens depending on page density, vs 50k–100k+ raw HTML). Extracts visible interactive elements across light and Shadow DOM with assigned IDs ([e1], [e2], ...), bounding coordinates, tag names, roles, accessible text, and occlusion states.',
         inputSchema: {
             type: 'object',
             properties: {},
@@ -152,7 +152,7 @@ const TOOLS = [
     },
     {
         name: 'nomad_action',
-        description: 'Execute an atomic interaction in the active tab (click, hover, type, clear, press key chord, selectOption, scroll, highlight). Best used with elementId from nomad_snapshot (e.g. "e1"). Compatible with React controlled components.',
+        description: 'Execute an atomic interaction in the active tab (click, hover, type, clear, press key chord, selectOption, scroll, highlight). Best used with elementId from nomad_snapshot (e.g. "e1") or CSS selector fallback. Fully compatible with React controlled components.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -167,7 +167,7 @@ const TOOLS = [
                 },
                 selector: {
                     type: 'string',
-                    description: 'CSS selector fallback if elementId is not used'
+                    description: 'CSS selector fallback if elementId is not used (e.g. ".todo-list li .toggle")'
                 },
                 text: {
                     type: 'string',
@@ -185,7 +185,10 @@ const TOOLS = [
                 y: { type: 'number', description: 'Viewport Y coordinate fallback' },
                 toX: { type: 'number', description: 'Destination X coordinate for drag action' },
                 toY: { type: 'number', description: 'Destination Y coordinate for drag action' },
-                scrollDeltaY: { type: 'number', description: 'Pixels to scroll down (positive) or up (negative) for "scroll"' }
+                scrollDeltaY: { type: 'number', description: 'Pixels to scroll down (positive) or up (negative) for "scroll"' },
+                scrollDeltaX: { type: 'number', description: 'Pixels to scroll right (positive) or left (negative) for "scroll"' },
+                direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Scroll direction fallback' },
+                amount: { type: 'number', description: 'Pixels to scroll for direction fallback' }
             },
             required: ['type'],
             additionalProperties: false
@@ -199,12 +202,12 @@ const TOOLS = [
             properties: {
                 mode: {
                     type: 'string',
-                    enum: ['stability', 'selector', 'timeout'],
+                    enum: ['stability', 'selector', 'timeout', 'stable', 'idle', 'domStable'],
                     description: 'Wait mode. Default: stability.'
                 },
                 selector: {
                     type: 'string',
-                    description: 'CSS selector to wait for (required if mode is "selector")'
+                    description: 'CSS selector to wait for (if provided, mode defaults to "selector")'
                 },
                 quietMs: {
                     type: 'number',
@@ -238,6 +241,8 @@ const TOOLS = [
                 domain: { type: 'string', description: 'Domain name for the cookie' },
                 path: { type: 'string', description: 'Path for the cookie (default: "/")' },
                 isSecure: { type: 'boolean', description: 'Secure cookie flag' },
+                isHTTPOnly: { type: 'boolean', description: 'HTTP-only cookie flag' },
+                httpOnly: { type: 'boolean', description: 'Alias for isHTTPOnly' },
                 expires: { type: 'number', description: 'Unix timestamp in seconds when the cookie expires' }
             },
             additionalProperties: false

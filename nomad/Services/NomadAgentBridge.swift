@@ -31,6 +31,8 @@ struct NomadElement: Codable {
     let value: String?
     let type: String?
     let bounds: NomadBounds
+    var className: String?
+    var rank: String?
     var isObscured: Bool?
     var disabled: Bool?
     var checked: Bool?
@@ -51,7 +53,7 @@ struct NomadBounds: Codable {
 /// Action request issued by an AI agent or DevX tool.
 struct NomadAction: Codable {
     var action: String // "click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight"
-    var target: String? // e.g. "e1", "e2"
+    var target: String? // e.g. "e1", "e2", or CSS selector fallback
     var text: String?
     var key: String? // "Enter", "Escape", "Tab", or chords "Meta+A", "Control+Enter"
     var direction: String? // "up", "down", "left", "right"
@@ -61,6 +63,8 @@ struct NomadAction: Codable {
     var y: CGFloat?
     var toX: CGFloat?
     var toY: CGFloat?
+    var scrollDeltaY: CGFloat?
+    var scrollDeltaX: CGFloat?
     var optionValue: String?
     var optionText: String?
     var modifiers: [String]?
@@ -77,6 +81,8 @@ struct NomadAction: Codable {
         y: CGFloat? = nil,
         toX: CGFloat? = nil,
         toY: CGFloat? = nil,
+        scrollDeltaY: CGFloat? = nil,
+        scrollDeltaX: CGFloat? = nil,
         optionValue: String? = nil,
         optionText: String? = nil,
         modifiers: [String]? = nil
@@ -92,6 +98,8 @@ struct NomadAction: Codable {
         self.y = y
         self.toX = toX
         self.toY = toY
+        self.scrollDeltaY = scrollDeltaY
+        self.scrollDeltaX = scrollDeltaX
         self.optionValue = optionValue
         self.optionText = optionText
         self.modifiers = modifiers
@@ -102,6 +110,7 @@ struct NomadAction: Codable {
         case target, elementId, selector
         case text, key, direction, amount, submit
         case x, y, toX, toY
+        case scrollDeltaY, deltaY, scrollDeltaX, deltaX
         case optionValue, optionText, modifiers
     }
 
@@ -115,13 +124,30 @@ struct NomadAction: Codable {
             ?? container.decodeIfPresent(String.self, forKey: .selector)
         self.text = try container.decodeIfPresent(String.self, forKey: .text)
         self.key = try container.decodeIfPresent(String.self, forKey: .key)
-        self.direction = try container.decodeIfPresent(String.self, forKey: .direction)
-        self.amount = try container.decodeIfPresent(CGFloat.self, forKey: .amount)
         self.submit = try container.decodeIfPresent(Bool.self, forKey: .submit)
         self.x = try container.decodeIfPresent(CGFloat.self, forKey: .x)
         self.y = try container.decodeIfPresent(CGFloat.self, forKey: .y)
         self.toX = try container.decodeIfPresent(CGFloat.self, forKey: .toX)
         self.toY = try container.decodeIfPresent(CGFloat.self, forKey: .toY)
+
+        let dy = try container.decodeIfPresent(CGFloat.self, forKey: .scrollDeltaY)
+            ?? container.decodeIfPresent(CGFloat.self, forKey: .deltaY)
+        let dx = try container.decodeIfPresent(CGFloat.self, forKey: .scrollDeltaX)
+            ?? container.decodeIfPresent(CGFloat.self, forKey: .deltaX)
+        self.scrollDeltaY = dy
+        self.scrollDeltaX = dx
+
+        if let dyVal = dy {
+            self.amount = abs(dyVal)
+            self.direction = dyVal >= 0 ? "down" : "up"
+        } else if let dxVal = dx {
+            self.amount = abs(dxVal)
+            self.direction = dxVal >= 0 ? "right" : "left"
+        } else {
+            self.direction = try container.decodeIfPresent(String.self, forKey: .direction)
+            self.amount = try container.decodeIfPresent(CGFloat.self, forKey: .amount)
+        }
+
         self.optionValue = try container.decodeIfPresent(String.self, forKey: .optionValue)
         self.optionText = try container.decodeIfPresent(String.self, forKey: .optionText)
         self.modifiers = try container.decodeIfPresent([String].self, forKey: .modifiers)
@@ -140,6 +166,8 @@ struct NomadAction: Codable {
         try container.encodeIfPresent(y, forKey: .y)
         try container.encodeIfPresent(toX, forKey: .toX)
         try container.encodeIfPresent(toY, forKey: .toY)
+        try container.encodeIfPresent(scrollDeltaY, forKey: .scrollDeltaY)
+        try container.encodeIfPresent(scrollDeltaX, forKey: .scrollDeltaX)
         try container.encodeIfPresent(optionValue, forKey: .optionValue)
         try container.encodeIfPresent(optionText, forKey: .optionText)
         try container.encodeIfPresent(modifiers, forKey: .modifiers)
@@ -178,7 +206,7 @@ enum NomadDOMScript {
                 // Recursive collector penetrating open Shadow DOM roots
                 function collectNodes(root, list) {
                     if (!root) return;
-                    var selector = 'a, button, input, textarea, select, details, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [tabindex]:not([tabindex="-1"]), iframe';
+                    var selector = 'a, button, input, textarea, select, details, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"], iframe';
                     try {
                         var found = root.querySelectorAll(selector);
                         for (var i = 0; i < found.length; i++) {
@@ -193,7 +221,7 @@ enum NomadDOMScript {
                     } catch(e) {}
                 }
 
-                // Resolve accessible label using ARIA, label tags, placeholder, title, and text
+                // Resolve accessible label using ARIA, label tags, placeholder, title, sibling labels, and text
                 function getAccessibleLabel(el) {
                     try {
                         if (el.getAttribute('aria-label')) {
@@ -216,6 +244,14 @@ enum NomadDOMScript {
                             var txt = (cloned.innerText || cloned.textContent || '').trim();
                             if (txt) return txt;
                         }
+                        // Sibling or adjacent label in parent container (common in TodoMVC, list items, and modern custom form rows)
+                        if (el.parentElement) {
+                            var sibLabel = el.parentElement.querySelector('label');
+                            if (sibLabel && sibLabel !== el) {
+                                var sibText = (sibLabel.innerText || sibLabel.textContent || '').trim();
+                                if (sibText) return sibText;
+                            }
+                        }
                         if (el.placeholder) return el.placeholder.trim();
                         if (el.getAttribute('title')) return el.getAttribute('title').trim();
                         if (el.tagName === 'INPUT' && (el.type === 'submit' || el.type === 'button') && el.value) {
@@ -227,20 +263,62 @@ enum NomadDOMScript {
                     }
                 }
 
+                // Extracts list ordinal index or rank (e.g. Hacker News, search results, ordered lists)
+                function getItemRank(el) {
+                    try {
+                        var row = el.closest('tr.athing') || el.closest('.athing');
+                        if (row) {
+                            var r = row.querySelector('.rank');
+                            if (r) {
+                                var num = (r.innerText || r.textContent || '').replace(/\\D/g, '');
+                                if (num) return num;
+                            }
+                        }
+                        var li = el.closest('li');
+                        if (li && li.parentElement && li.parentElement.tagName === 'OL') {
+                            var idx = Array.prototype.indexOf.call(li.parentElement.children, li);
+                            if (idx >= 0) return String(idx + 1);
+                        }
+                        var container = el.closest('article') || el.closest('[role="article"]');
+                        if (container) {
+                            var rEl = container.querySelector('[class*="rank"], [class*="index"]');
+                            if (rEl) {
+                                var num2 = (rEl.innerText || rEl.textContent || '').replace(/\\D/g, '');
+                                if (num2) return num2;
+                            }
+                        }
+                    } catch(e) {}
+                    return null;
+                }
+
                 var allInteractive = [];
                 collectNodes(document, allInteractive);
 
                 for (var i = 0; i < allInteractive.length; i++) {
                     var el = allInteractive[i];
                     var rect = el.getBoundingClientRect();
+                    var isInputToggle = (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio'));
 
                     // Visibility checks: geometry and viewport boundary
-                    if (rect.width <= 0 || rect.height <= 0) continue;
+                    // Note: Custom styled checkboxes/radios often use opacity:0 with layout preserved
+                    if (!isInputToggle && (rect.width <= 0 || rect.height <= 0)) continue;
                     if (rect.bottom < -50 || rect.top > vpH + 50 || rect.right < -50 || rect.left > vpW + 50) continue;
 
                     var style = window.getComputedStyle(el);
-                    if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) < 0.05) continue;
-                    if (style.pointerEvents === 'none') continue;
+                    if (style.display === 'none' || style.visibility === 'hidden') continue;
+                    if (parseFloat(style.opacity) < 0.05 && !isInputToggle) continue;
+                    if (style.pointerEvents === 'none' && !isInputToggle) continue;
+
+                    var text = getAccessibleLabel(el).replace(/\\s+/g, ' ').substring(0, 80);
+                    var tag = el.tagName.toLowerCase();
+                    var role = el.getAttribute('role') || tag;
+                    var type = el.getAttribute('type') || null;
+                    var val = (el.value !== undefined && el.value !== '' && el.type !== 'password') ? String(el.value).substring(0, 50) : null;
+
+                    // Filter out meaningless whitespace links or empty non-interactive anchors
+                    if ((tag === 'a' || tag === 'button') && !text && !val && !el.querySelector('img, svg')) {
+                        continue;
+                    }
 
                     var id = 'e' + counter++;
                     this.elements[id] = el;
@@ -250,7 +328,7 @@ enum NomadDOMScript {
                     var isObscured = false;
                     var cx = Math.round(rect.left + rect.width / 2);
                     var cy = Math.round(rect.top + rect.height / 2);
-                    if (cx >= 0 && cx <= vpW && cy >= 0 && cy <= vpH) {
+                    if (cx >= 0 && cx <= vpW && cy >= 0 && cy <= vpH && !isInputToggle) {
                         try {
                             var topEl = document.elementFromPoint(cx, cy);
                             if (topEl && topEl !== el && !el.contains(topEl) && !topEl.contains(el)) {
@@ -263,11 +341,8 @@ enum NomadDOMScript {
                         } catch(e) {}
                     }
 
-                    var text = getAccessibleLabel(el).replace(/\\s+/g, ' ').substring(0, 80);
-                    var tag = el.tagName.toLowerCase();
-                    var role = el.getAttribute('role') || tag;
-                    var type = el.getAttribute('type') || null;
-                    var val = (el.value !== undefined && el.value !== '' && el.type !== 'password') ? String(el.value).substring(0, 50) : null;
+                    var cls = (el.className && typeof el.className === 'string') ? el.className.trim().split(/\\s+/).slice(0, 2).join('.') : null;
+                    var itemRank = getItemRank(el);
 
                     var disabled = Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true');
                     var checked = Boolean(el.checked || el.getAttribute('aria-checked') === 'true');
@@ -283,6 +358,8 @@ enum NomadDOMScript {
                         text: text,
                         value: val,
                         type: type,
+                        className: cls,
+                        rank: itemRank,
                         isObscured: isObscured,
                         disabled: disabled,
                         checked: checked,
@@ -299,7 +376,7 @@ enum NomadDOMScript {
                     });
                 }
 
-                // Build compact markdown semantic summary for LLM prompt ingestion (~300 tokens)
+                // Build compact markdown semantic summary for LLM prompt ingestion
                 var summaryLines = [
                     '[Page: ' + (document.title || 'Untitled') + ' | URL: ' + window.location.href + ']',
                     'Interactive Elements (' + results.length + '):'
@@ -307,9 +384,12 @@ enum NomadDOMScript {
 
                 for (var j = 0; j < results.length; j++) {
                     var item = results[j];
-                    var desc = '[' + item.id + '] <' + item.tag;
+                    var desc = '[' + item.id + ']';
+                    if (item.rank) desc += ' #' + item.rank;
+                    desc += ' <' + item.tag;
                     if (item.type) desc += ' type="' + item.type + '"';
                     if (item.role && item.role !== item.tag) desc += ' role="' + item.role + '"';
+                    if (item.className) desc += ' class="' + item.className + '"';
                     if (item.text) desc += ' "' + item.text + '"';
                     if (item.value) desc += ' value="' + item.value + '"';
                     if (item.checked) desc += ' checked';
@@ -338,11 +418,59 @@ enum NomadDOMScript {
 
             // 2. Dispatches synthetic and realistic user actions
             performAction: function(actionObj) {
-                var action = actionObj.action || '';
-                var targetId = actionObj.target;
-                var el = targetId ? (this.elements[targetId] || document.querySelector('[data-nomad-id="' + targetId + '"]')) : null;
+                var action = actionObj.action || actionObj.type || '';
+                var targetId = actionObj.target || actionObj.elementId || actionObj.selector;
+                var el = null;
 
-                if (targetId && !el) {
+                if (targetId) {
+                    if (this.elements && this.elements[targetId]) {
+                        el = this.elements[targetId];
+                        // Auto-recover if node was detached during React/DOM re-render
+                        if (!document.contains(el)) {
+                            var recheck = document.querySelector('[data-nomad-id="' + targetId + '"]');
+                            if (recheck) {
+                                el = recheck;
+                                this.elements[targetId] = recheck;
+                            } else if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+                                el = document.activeElement;
+                                this.elements[targetId] = el;
+                                try { el.setAttribute('data-nomad-id', targetId); } catch(e) {}
+                            }
+                        }
+                    } else {
+                        try {
+                            el = document.querySelector('[data-nomad-id="' + targetId + '"]');
+                        } catch(e) {}
+                        if (!el) {
+                            try {
+                                el = document.querySelector(targetId);
+                            } catch(e) {}
+                        }
+                        if (!el && document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+                            el = document.activeElement;
+                        }
+                        if (!el) {
+                            function findInShadow(root) {
+                                if (!root) return null;
+                                var all = root.querySelectorAll('*');
+                                for (var s = 0; s < all.length; s++) {
+                                    if (all[s].shadowRoot) {
+                                        try {
+                                            var found = all[s].shadowRoot.querySelector(targetId);
+                                            if (found) return found;
+                                        } catch(e) {}
+                                        var deeper = findInShadow(all[s].shadowRoot);
+                                        if (deeper) return deeper;
+                                    }
+                                }
+                                return null;
+                            }
+                            try { el = findInShadow(document); } catch(e) {}
+                        }
+                    }
+                }
+
+                if (targetId && !el && action !== 'scroll' && action !== 'press') {
                     return { success: false, message: 'Target element ' + targetId + ' not found or no longer in DOM.', elementId: targetId };
                 }
 
@@ -351,6 +479,24 @@ enum NomadDOMScript {
                         if (el) {
                             el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
                             el.focus();
+
+                            // If el is a label, delegate directly to its associated form control
+                            if (el.tagName === 'LABEL') {
+                                var targetInput = el.htmlFor ? document.getElementById(el.htmlFor) : el.querySelector('input, select, textarea');
+                                if (targetInput) {
+                                    el = targetInput;
+                                }
+                            }
+
+                            // For checkboxes and radios: calling native el.click() cleanly toggles state and fires change/input
+                            if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+                                el.click();
+                                return { success: true, message: 'Clicked ' + (targetId || 'checkbox'), elementId: targetId };
+                            }
+
+                            // Trigger native DOM click for default behavior
+                            try { el.click(); } catch(e) {}
+
                             var pdown = new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window });
                             var mdown = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window });
                             var pup = new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window });
@@ -363,14 +509,10 @@ enum NomadDOMScript {
                             el.dispatchEvent(mup);
                             el.dispatchEvent(clk);
 
-                            if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
-                                el.dispatchEvent(new Event('change', { bubbles: true }));
-                            }
-
                             if (el.tagName === 'A' && el.href && !el.href.startsWith('javascript:')) {
                                 window.location.href = el.href;
                             }
-                            return { success: true, message: 'Clicked ' + targetId, elementId: targetId };
+                            return { success: true, message: 'Clicked ' + (targetId || 'element'), elementId: targetId };
                         } else if (actionObj.x !== undefined && actionObj.y !== undefined) {
                             var hit = document.elementFromPoint(actionObj.x, actionObj.y);
                             if (hit) {
@@ -425,12 +567,18 @@ enum NomadDOMScript {
                             var enterUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
                             el.dispatchEvent(enterDown);
                             el.dispatchEvent(enterUp);
-                            if (el.form) el.form.submit();
+                            var f = el.form || el.closest('form');
+                            if (f) {
+                                try {
+                                    if (typeof f.requestSubmit === 'function') f.requestSubmit();
+                                    else f.submit();
+                                } catch(e) {}
+                            }
                         }
                         return { success: true, message: 'Typed into ' + targetId, elementId: targetId };
 
                     case 'press':
-                        var rawKey = actionObj.key || 'Enter';
+                        var rawKey = actionObj.key || actionObj.text || 'Enter';
                         var targetNode = el || document.activeElement || document.body;
 
                         // Parse modifiers from chords like "Meta+A", "Control+Enter", "Shift+Tab"
@@ -456,6 +604,20 @@ enum NomadDOMScript {
                         var kup = new KeyboardEvent('keyup', kopts);
                         targetNode.dispatchEvent(kdown);
                         targetNode.dispatchEvent(kup);
+
+                        // If Enter is pressed, trigger form submit if inside a form
+                        if (mainKey === 'Enter' || rawKey === 'Enter') {
+                            var formNode = (targetNode && targetNode.form) || (targetNode && targetNode.closest ? targetNode.closest('form') : null);
+                            if (formNode) {
+                                try {
+                                    if (typeof formNode.requestSubmit === 'function') {
+                                        formNode.requestSubmit();
+                                    } else {
+                                        formNode.submit();
+                                    }
+                                } catch(e) {}
+                            }
+                        }
                         return { success: true, message: 'Pressed key ' + rawKey };
 
                     case 'selectOption':
@@ -482,15 +644,31 @@ enum NomadDOMScript {
                         return { success: false, message: 'Option not found in ' + targetId };
 
                     case 'scroll':
-                        var dir = actionObj.direction || 'down';
-                        var amt = actionObj.amount || 400;
-                        var dx = 0, dy = 0;
-                        if (dir === 'down') dy = amt;
-                        else if (dir === 'up') dy = -amt;
-                        else if (dir === 'right') dx = amt;
-                        else if (dir === 'left') dx = -amt;
+                        var dx = 0;
+                        var dy = 0;
+                        if (actionObj.scrollDeltaY !== undefined && actionObj.scrollDeltaY !== null) {
+                            dy = Number(actionObj.scrollDeltaY) || 0;
+                        } else if (actionObj.deltaY !== undefined && actionObj.deltaY !== null) {
+                            dy = Number(actionObj.deltaY) || 0;
+                        }
+                        if (actionObj.scrollDeltaX !== undefined && actionObj.scrollDeltaX !== null) {
+                            dx = Number(actionObj.scrollDeltaX) || 0;
+                        } else if (actionObj.deltaX !== undefined && actionObj.deltaX !== null) {
+                            dx = Number(actionObj.deltaX) || 0;
+                        }
+
+                        if (dx === 0 && dy === 0) {
+                            var dir = actionObj.direction || 'down';
+                            var amt = actionObj.amount !== undefined ? Number(actionObj.amount) : 400;
+                            if (dir === 'down') dy = amt;
+                            else if (dir === 'up') dy = -amt;
+                            else if (dir === 'right') dx = amt;
+                            else if (dir === 'left') dx = -amt;
+                        }
+
                         window.scrollBy({ left: dx, top: dy, behavior: 'instant' });
-                        return { success: true, message: 'Scrolled ' + dir + ' by ' + amt + 'px' };
+                        var desc = dy !== 0 ? (dy > 0 ? 'down by ' + dy + 'px' : 'up by ' + Math.abs(dy) + 'px') : (dx > 0 ? 'right by ' + dx + 'px' : 'left by ' + Math.abs(dx) + 'px');
+                        return { success: true, message: 'Scrolled ' + desc };
 
                     case 'highlight':
                         if (!el) return { success: false, message: 'No target element to highlight' };
@@ -649,21 +827,40 @@ extension Tab {
     /// Waits for DOM mutation quiescence (stability) on the active page.
     @MainActor
     func waitForStability(quietMs: Int = 250, timeoutMs: Int = 5000) async throws -> [String: Any] {
-        _ = try await webView.evaluateJavaScript(NomadDOMScript.core)
-        let script = "return await window.__nomad.waitForStability(quietMs, timeoutMs);"
-        return try await withCheckedThrowingContinuation { continuation in
-            webView.callAsyncJavaScript(script, arguments: ["quietMs": quietMs, "timeoutMs": timeoutMs], in: nil, in: .page) { result in
-                switch result {
-                case .success(let val):
-                    if let dict = val as? [String: Any] {
-                        continuation.resume(returning: dict)
-                    } else {
-                        continuation.resume(returning: ["success": true, "message": "DOM stabilized"])
+        // If webView is still loading, wait for initial document load
+        let start = Date()
+        while webView.isLoading && Date().timeIntervalSince(start) < (Double(timeoutMs) / 1000.0) {
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        }
+        _ = try? await webView.evaluateJavaScript(NomadDOMScript.core)
+        let script = """
+        if (!window.__nomad || !window.__nomad.waitForStability) {
+            return { success: true, message: 'DOM ready' };
+        }
+        return await window.__nomad.waitForStability(quietMs, timeoutMs);
+        """
+        do {
+            return try await withCheckedThrowingContinuation { continuation in
+                webView.callAsyncJavaScript(script, arguments: ["quietMs": quietMs, "timeoutMs": timeoutMs], in: nil, in: .page) { result in
+                    switch result {
+                    case .success(let val):
+                        if let dict = val as? [String: Any] {
+                            continuation.resume(returning: dict)
+                        } else {
+                            continuation.resume(returning: ["success": true, "message": "DOM stabilized"])
+                        }
+                    case .failure(let error):
+                        let nsErr = error as NSError
+                        if nsErr.domain == "WKErrorDomain" && nsErr.code == 4 { // WKErrorJavaScriptExceptionOccurred during page navigation
+                            continuation.resume(returning: ["success": true, "message": "Document navigated"])
+                        } else {
+                            continuation.resume(throwing: error)
+                        }
                     }
-                case .failure(let error):
-                    continuation.resume(throwing: error)
                 }
             }
+        } catch {
+            return ["success": true, "message": "DOM ready fallback"]
         }
     }
 

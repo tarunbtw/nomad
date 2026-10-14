@@ -137,6 +137,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     }
 
     @Published var swipeState: SwipeGestureState? = nil
+    @Published var lastNavigationError: String? = nil
     
     /// The retained custom web view for this tab.
     private(set) var webView: BrowserWebView
@@ -280,6 +281,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     /// Loads a specific URL.
     func load(url: URL) {
         self.url = url
+        self.lastNavigationError = nil
         if url.scheme == "nomad" {
             self.isBlank = false
             self.isLoading = false
@@ -827,11 +829,13 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         self.isLoading = false
+        self.lastNavigationError = error.localizedDescription
         print("Tab Navigation failed: \(error.localizedDescription)")
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         self.isLoading = false
+        self.lastNavigationError = error.localizedDescription
         print("Tab Provisional navigation failed: \(error.localizedDescription)")
     }
 
