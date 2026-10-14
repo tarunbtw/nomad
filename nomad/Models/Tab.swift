@@ -297,8 +297,12 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         self.isBlank = (url.absoluteString == "about:blank")
         self.favicon = nil
         webView.setMagnification(1.0, centeredAt: .zero)
-        let request = URLRequest(url: url)
-        webView.load(request)
+        if url.isFileURL {
+            webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        } else {
+            let request = URLRequest(url: url)
+            webView.load(request)
+        }
         fetchFavicon(for: url)
     }
 
@@ -849,6 +853,22 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
             }
         }
         return nil
+    }
+
+    // MARK: - Non-blocking JavaScript Alert / Confirm / Prompt handling
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        appendConsoleEntry(level: .info, message: "[Dialog Alert] \(message)")
+        completionHandler()
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        appendConsoleEntry(level: .info, message: "[Dialog Confirm] \(message) -> Accepted")
+        completionHandler(true)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        appendConsoleEntry(level: .info, message: "[Dialog Prompt] \(prompt)")
+        completionHandler(defaultText ?? "")
     }
 }
 

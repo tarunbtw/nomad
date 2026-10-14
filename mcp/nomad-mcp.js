@@ -127,19 +127,23 @@ const TOOLS = [
     },
     {
         name: 'nomad_navigate',
-        description: 'Navigate the active tab to a new URL.',
+        description: 'Navigate the active tab to a new URL, or navigate browser history (back, forward, reload).',
         inputSchema: {
             type: 'object',
             properties: {
-                url: { type: 'string', description: 'Complete destination URL (e.g. https://github.com)' }
+                url: { type: 'string', description: 'Complete destination URL (e.g. https://github.com)' },
+                action: {
+                    type: 'string',
+                    enum: ['url', 'back', 'forward', 'reload'],
+                    description: 'Navigation action. If not specified, defaults to "url".'
+                }
             },
-            required: ['url'],
             additionalProperties: false
         }
     },
     {
         name: 'nomad_snapshot',
-        description: 'Capture a token-optimized semantic perception tree (~300 tokens vs 100k raw HTML). Extracts visible interactive elements with assigned IDs ([e1], [e2], ...), bounding coordinates, tag names, roles, and text labels.',
+        description: 'Capture a token-optimized semantic perception tree (~300 tokens vs 100k raw HTML). Extracts visible interactive elements across light and Shadow DOM with assigned IDs ([e1], [e2], ...), bounding coordinates, tag names, roles, accessible text, and occlusion states.',
         inputSchema: {
             type: 'object',
             properties: {},
@@ -148,13 +152,13 @@ const TOOLS = [
     },
     {
         name: 'nomad_action',
-        description: 'Execute an atomic interaction in the active tab (click, type, press key, scroll, highlight). Best used with elementId from nomad_snapshot (e.g. "e1").',
+        description: 'Execute an atomic interaction in the active tab (click, hover, type, clear, press key chord, selectOption, scroll, highlight). Best used with elementId from nomad_snapshot (e.g. "e1"). Compatible with React controlled components.',
         inputSchema: {
             type: 'object',
             properties: {
                 type: {
                     type: 'string',
-                    enum: ['click', 'type', 'press', 'scroll', 'highlight'],
+                    enum: ['click', 'hover', 'type', 'clear', 'press', 'selectOption', 'scroll', 'highlight'],
                     description: 'Type of action to execute'
                 },
                 elementId: {
@@ -167,13 +171,75 @@ const TOOLS = [
                 },
                 text: {
                     type: 'string',
-                    description: 'Text to enter (for "type" action) or key name (for "press" action, e.g. "Enter")'
+                    description: 'Text to enter (for "type" action) or key name / chord (for "press" action, e.g. "Enter", "Meta+A")'
+                },
+                optionValue: {
+                    type: 'string',
+                    description: 'Option value to choose for "selectOption"'
+                },
+                optionText: {
+                    type: 'string',
+                    description: 'Option visible text to choose for "selectOption"'
                 },
                 x: { type: 'number', description: 'Viewport X coordinate fallback' },
                 y: { type: 'number', description: 'Viewport Y coordinate fallback' },
+                toX: { type: 'number', description: 'Destination X coordinate for drag action' },
+                toY: { type: 'number', description: 'Destination Y coordinate for drag action' },
                 scrollDeltaY: { type: 'number', description: 'Pixels to scroll down (positive) or up (negative) for "scroll"' }
             },
             required: ['type'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'nomad_wait',
+        description: 'Wait for DOM mutation stability, a specific CSS selector to appear, or a timeout before continuing execution. Essential for SPAs (React, Next.js) to finish rendering.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                mode: {
+                    type: 'string',
+                    enum: ['stability', 'selector', 'timeout'],
+                    description: 'Wait mode. Default: stability.'
+                },
+                selector: {
+                    type: 'string',
+                    description: 'CSS selector to wait for (required if mode is "selector")'
+                },
+                quietMs: {
+                    type: 'number',
+                    description: 'Milliseconds of DOM mutation silence required for "stability" (default: 250)'
+                },
+                timeoutMs: {
+                    type: 'number',
+                    description: 'Maximum milliseconds to wait before timing out (default: 5000)'
+                },
+                durationMs: {
+                    type: 'number',
+                    description: 'Duration in milliseconds for "timeout" mode (default: 1000)'
+                }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'nomad_cookies',
+        description: 'Inspect, set, or clear session cookies in the active browser session for authentication and state management.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                action: {
+                    type: 'string',
+                    enum: ['get', 'set', 'clear'],
+                    description: 'Cookie operation (default: get)'
+                },
+                name: { type: 'string', description: 'Cookie name (for "set")' },
+                value: { type: 'string', description: 'Cookie value (for "set")' },
+                domain: { type: 'string', description: 'Domain name for the cookie' },
+                path: { type: 'string', description: 'Path for the cookie (default: "/")' },
+                isSecure: { type: 'boolean', description: 'Secure cookie flag' },
+                expires: { type: 'number', description: 'Unix timestamp in seconds when the cookie expires' }
+            },
             additionalProperties: false
         }
     },
@@ -241,6 +307,23 @@ async function handleToolCall(name, args) {
         case 'nomad_action': {
             const res = await callNomad('POST', '/action', args);
             return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+        }
+        case 'nomad_wait': {
+            const res = await callNomad('POST', '/wait', args);
+            return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+        }
+        case 'nomad_cookies': {
+            const act = (args && args.action) || 'get';
+            if (act === 'get') {
+                const res = await callNomad('GET', '/cookies');
+                return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            } else if (act === 'clear') {
+                const res = await callNomad('DELETE', '/cookies');
+                return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            } else {
+                const res = await callNomad('POST', '/cookies', args);
+                return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            }
         }
         case 'nomad_screenshot': {
             const isLabeled = Boolean(args && args.labeled);

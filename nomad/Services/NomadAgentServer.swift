@@ -235,14 +235,201 @@ final class NomadAgentServer: ObservableObject {
                 return
             }
             guard let bodyData = bodyData,
-                  let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any],
-                  let urlStr = json["url"] as? String,
-                  let url = URL(string: urlStr) else {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing or invalid url in body\"}")
+                  let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing body in /navigate\"}")
                 return
             }
-            activeTab.load(url: url)
-            sendJSON(connection: connection, object: ["success": true, "navigatedTo": url.absoluteString])
+            let action = (json["action"] as? String)?.lowercased()
+            switch action {
+            case "back":
+                store.goBack()
+                sendJSON(connection: connection, object: ["success": true, "action": "back"])
+            case "forward":
+                store.goForward()
+                sendJSON(connection: connection, object: ["success": true, "action": "forward"])
+            case "reload":
+                store.reload()
+                sendJSON(connection: connection, object: ["success": true, "action": "reload"])
+            default:
+                guard let urlStr = json["url"] as? String, let url = URL(string: urlStr) else {
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing or invalid url in body\"}")
+                    return
+                }
+                activeTab.load(url: url)
+                sendJSON(connection: connection, object: ["success": true, "navigatedTo": url.absoluteString])
+            }
+
+        case ("POST", "/navigate/back"):
+            store.goBack()
+            sendJSON(connection: connection, object: ["success": true, "action": "back"])
+
+        case ("POST", "/navigate/forward"):
+            store.goForward()
+            sendJSON(connection: connection, object: ["success": true, "action": "forward"])
+
+        case ("POST", "/navigate/reload"):
+            store.reload()
+            sendJSON(connection: connection, object: ["success": true, "action": "reload"])
+
+        case ("POST", "/wait"):
+            guard let activeTab = store.activeTab else {
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}")
+                return
+            }
+            var mode = "stability"
+            var quietMs = 250
+            var timeoutMs = 5000
+            var durationMs = 1000
+            var selector = ""
+
+            if let bodyData = bodyData,
+               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
+                if let m = json["mode"] as? String { mode = m }
+                if let q = json["quietMs"] as? Int { quietMs = q }
+                if let t = json["timeoutMs"] as? Int { timeoutMs = t }
+                if let d = json["durationMs"] as? Int { durationMs = d }
+                if let s = json["selector"] as? String { selector = s }
+            }
+
+            switch mode {
+            case "stability":
+                do {
+                    let result = try await activeTab.waitForStability(quietMs: quietMs, timeoutMs: timeoutMs)
+                    sendJSON(connection: connection, object: result)
+                } catch {
+                    sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}")
+                }
+
+            case "selector":
+                guard !selector.isEmpty else {
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing selector string\"}")
+                    return
+                }
+                let escapedSel = selector.replacingOccurrences(of: "'", with: "\\'")
+                let script = """
+                (function() {
+                    return new Promise(function(resolve) {
+                        var sel = '\(escapedSel)';
+                        if (document.querySelector(sel)) {
+                            resolve({ success: true, message: 'Element already present' });
+                            return;
+                        }
+                        var timer = setTimeout(function() {
+                            obs.disconnect();
+                            resolve({ success: false, message: 'Timeout waiting for ' + sel });
+                        }, \(timeoutMs));
+                        var obs = new MutationObserver(function() {
+                            if (document.querySelector(sel)) {
+                                clearTimeout(timer);
+                                obs.disconnect();
+                                resolve({ success: true, message: 'Element appeared' });
+                            }
+                        });
+                        obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
+                    });
+                })()
+                """
+                do {
+                    _ = try await activeTab.webView.evaluateJavaScript(script)
+                    sendJSON(connection: connection, object: ["success": true, "selector": selector])
+                } catch {
+                    sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}")
+                }
+
+            case "timeout":
+                try? await Task.sleep(nanoseconds: UInt64(durationMs) * 1_000_000)
+                sendJSON(connection: connection, object: ["success": true, "waitedMs": durationMs])
+
+            default:
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Unknown wait mode: \(mode)\"}")
+            }
+
+        case ("GET", "/cookies"):
+            guard let activeTab = store.activeTab else {
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}")
+                return
+            }
+            let cookieStore = activeTab.webView.configuration.websiteDataStore.httpCookieStore
+            let allCookies = await cookieStore.allCookies()
+            let host = activeTab.url?.host ?? ""
+            let matched = allCookies.filter { cookie in
+                host.isEmpty || cookie.domain.contains(host) || host.contains(cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")))
+            }.map { cookie -> [String: Any] in
+                var dict: [String: Any] = [
+                    "name": cookie.name,
+                    "value": cookie.value,
+                    "domain": cookie.domain,
+                    "path": cookie.path,
+                    "isSecure": cookie.isSecure,
+                    "isHTTPOnly": cookie.isHTTPOnly
+                ]
+                if let exp = cookie.expiresDate {
+                    dict["expires"] = exp.timeIntervalSince1970
+                }
+                return dict
+            }
+            sendJSON(connection: connection, object: ["cookies": matched, "domain": host])
+
+        case ("POST", "/cookies"):
+            guard let activeTab = store.activeTab else {
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}")
+                return
+            }
+            guard let bodyData = bodyData,
+                  let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing cookie JSON body\"}")
+                return
+            }
+            let cookieStore = activeTab.webView.configuration.websiteDataStore.httpCookieStore
+            let host = activeTab.url?.host ?? "localhost"
+
+            var cookiesToSet: [[String: Any]] = []
+            if let list = json["cookies"] as? [[String: Any]] {
+                cookiesToSet = list
+            } else if json["name"] != nil && json["value"] != nil {
+                cookiesToSet = [json]
+            }
+
+            var setCount = 0
+            for c in cookiesToSet {
+                guard let name = c["name"] as? String, let value = c["value"] as? String else { continue }
+                let domain = c["domain"] as? String ?? host
+                let path = c["path"] as? String ?? "/"
+                var props: [HTTPCookiePropertyKey: Any] = [
+                    .name: name,
+                    .value: value,
+                    .domain: domain,
+                    .path: path
+                ]
+                if let sec = c["isSecure"] as? Bool, sec {
+                    props[.secure] = "TRUE"
+                }
+                if let exp = c["expires"] as? Double {
+                    props[.expires] = Date(timeIntervalSince1970: exp)
+                }
+                if let cookie = HTTPCookie(properties: props) {
+                    await cookieStore.setCookie(cookie)
+                    setCount += 1
+                }
+            }
+            sendJSON(connection: connection, object: ["success": true, "setCount": setCount])
+
+        case ("DELETE", "/cookies"):
+            guard let activeTab = store.activeTab else {
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}")
+                return
+            }
+            let cookieStore = activeTab.webView.configuration.websiteDataStore.httpCookieStore
+            let allCookies = await cookieStore.allCookies()
+            let host = activeTab.url?.host ?? ""
+            var deletedCount = 0
+            for cookie in allCookies {
+                if host.isEmpty || cookie.domain.contains(host) || host.contains(cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))) {
+                    await cookieStore.deleteCookie(cookie)
+                    deletedCount += 1
+                }
+            }
+            sendJSON(connection: connection, object: ["success": true, "deletedCount": deletedCount])
 
         case ("GET", "/snapshot"):
             guard let activeTab = store.activeTab else {
