@@ -33,27 +33,10 @@ final class Lights: NSObject {
         spacing = (16...32).contains(measured) ? measured : 20
         super.init()
 
-        let centre = NotificationCenter.default
-        for name in [
-            NSWindow.didResizeNotification,
-            NSWindow.didEndLiveResizeNotification,
-            NSWindow.didBecomeKeyNotification,
-            NSWindow.didResignKeyNotification,
-            NSWindow.didExitFullScreenNotification,
-            NSWindow.didChangeScreenNotification,
-            NSWindow.willCloseNotification,
-        ] {
-            centre.addObserver(self, selector: #selector(place), name: name, object: window)
-        }
-        centre.addObserver(self, selector: #selector(windowWillClose), name: NSWindow.willCloseNotification, object: window)
-
-        let buttons = self.buttons
-        if let bar = buttons.first?.superview, let container = bar.superview {
-            for view in [container, bar] + buttons {
-                view.postsFrameChangedNotifications = true
-                centre.addObserver(self, selector: #selector(place), name: NSView.frameDidChangeNotification, object: view)
-            }
-        }
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(place), name: NSWindow.didResizeNotification, object: window)
+        nc.addObserver(self, selector: #selector(place), name: NSWindow.didExitFullScreenNotification, object: window)
+        nc.addObserver(self, selector: #selector(windowWillClose), name: NSWindow.willCloseNotification, object: window)
         place()
     }
 

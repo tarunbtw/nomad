@@ -196,11 +196,9 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Bookmark Operations
     private func normalizeURL(_ url: String) -> String {
-        var str = url.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        while str.hasSuffix("/") {
-            str.removeLast()
-        }
-        return str
+        url.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .lowercased()
     }
 
     func isBookmarked(_ urlString: String) -> Bool {

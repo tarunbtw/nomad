@@ -18,25 +18,6 @@ struct HistoryItem: Codable, Identifiable, Equatable, Sendable {
     var host: String {
         URL(string: url)?.host ?? ""
     }
-
-    enum CodingKeys: String, CodingKey {
-        case id, url, title, timestamp
-    }
-
-    init(id: UUID = UUID(), url: String, title: String, timestamp: Date) {
-        self.id = id
-        self.url = url
-        self.title = title
-        self.timestamp = timestamp
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
-        self.url = try container.decode(String.self, forKey: .url)
-        self.title = try container.decode(String.self, forKey: .title)
-        self.timestamp = try container.decode(Date.self, forKey: .timestamp)
-    }
 }
 
 /// Represents a chronological group of visits for a specific calendar date.

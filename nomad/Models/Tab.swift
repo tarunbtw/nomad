@@ -178,7 +178,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         let effectiveConfig = configuration ?? ExtensionManager.shared.configuration(for: initialURL) ?? WebKitPool.makeConfiguration(isIncognito: isIncognito)
         let webView = BrowserWebView(frame: NSRect(x: 0, y: 0, width: 1180, height: 730), configuration: effectiveConfig)
         webView.customUserAgent = WebKitPool.customUserAgent
-        webView.allowsBackForwardNavigationGestures = false
+        webView.allowsBackForwardNavigationGestures = true
         webView.allowsMagnification = false
         webView.setMagnification(1.0, centeredAt: .zero)
         webView.pageZoom = 1.0
@@ -330,7 +330,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
 
         let newWebView = BrowserWebView(frame: NSRect(x: 0, y: 0, width: 1180, height: 730), configuration: targetConfig)
         newWebView.customUserAgent = WebKitPool.customUserAgent
-        newWebView.allowsBackForwardNavigationGestures = false
+        newWebView.allowsBackForwardNavigationGestures = true
         newWebView.allowsMagnification = false
         newWebView.setMagnification(1.0, centeredAt: .zero)
         newWebView.pageZoom = 1.0
@@ -886,140 +886,10 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
     }
 }
 
-// MARK: - Custom Browser WebView with Directional Axis Locking and Fluid Gestures
+// MARK: - Browser WebView
 @MainActor
 final class BrowserWebView: WKWebView {
     weak var tab: Tab?
-
-    private enum ActiveScrollAxis {
-        case none
-        case vertical
-        case horizontalSwipe
-        case horizontalSuppressed
-    }
-
-    private var currentAxis: ActiveScrollAxis = .none
-    private var accumulatedX: CGFloat = 0
-    private var hasTriggeredHaptic: Bool = false
-
-    override func scrollWheel(with event: NSEvent) {
-        guard let tab = tab, event.hasPreciseScrollingDeltas else {
-            super.scrollWheel(with: event)
-            return
-        }
-
-        let deltaX = event.scrollingDeltaX
-        let deltaY = event.scrollingDeltaY
-
-        // Handle end or cancellation of the scroll gesture
-        if event.phase == .ended || event.phase == .cancelled {
-            if currentAxis == .horizontalSwipe {
-                let direction: Tab.SwipeDirection = accumulatedX > 0 ? .back : .forward
-                let shouldCommit = abs(accumulatedX) >= 55
-                tab.finishSwipeGesture(commit: shouldCommit, direction: direction)
-            }
-            currentAxis = .none
-            accumulatedX = 0
-            hasTriggeredHaptic = false
-            super.scrollWheel(with: event)
-            return
-        }
-
-        // Detect axis when gesture begins
-        if event.phase == .began {
-            accumulatedX = 0
-            hasTriggeredHaptic = false
-
-            // If vertical motion is dominant, lock strictly to vertical axis to eliminate any diagonal wobble
-            if abs(deltaY) >= abs(deltaX) {
-                currentAxis = .vertical
-            } else if abs(deltaX) > abs(deltaY) * 1.5 && abs(deltaX) > 1.5 {
-                // Dominant horizontal motion
-                if (deltaX > 0 && tab.canGoBack) || (deltaX < 0 && tab.canGoForward) {
-                    currentAxis = .horizontalSwipe
-                } else {
-                    currentAxis = .horizontalSuppressed
-                }
-            } else {
-                currentAxis = .none
-            }
-        }
-
-        // Process active gestures
-        switch currentAxis {
-        case .horizontalSwipe:
-            if event.phase == .changed {
-                accumulatedX += deltaX
-
-                // Cancel if user swipes back against the allowed navigation direction
-                if (accumulatedX > 0 && !tab.canGoBack) || (accumulatedX < 0 && !tab.canGoForward) {
-                    accumulatedX = 0
-                    currentAxis = .none
-                    tab.cancelSwipeGesture()
-                    super.scrollWheel(with: event)
-                    return
-                }
-
-                let threshold: CGFloat = 55
-                let distance = abs(accumulatedX)
-                let progress = min(distance / threshold, 1.25)
-                let direction: Tab.SwipeDirection = accumulatedX > 0 ? .back : .forward
-                let isTriggered = distance >= threshold
-
-                if isTriggered && !hasTriggeredHaptic {
-                    hasTriggeredHaptic = true
-                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
-                } else if !isTriggered && hasTriggeredHaptic {
-                    hasTriggeredHaptic = false
-                }
-
-                tab.updateSwipeGesture(direction: direction, progress: progress, distance: distance, isTriggered: isTriggered)
-                return // Fully consume horizontal event so webpage never moves/wobbles!
-            }
-
-        case .horizontalSuppressed:
-            // Suppress horizontal elastic overscroll wobble at the edges when cannot go back/forward
-            if event.phase == .changed {
-                return
-            }
-
-        case .vertical:
-            // Lock to vertical scrolling: eliminate diagonal horizontal drift (deltaX)
-            if (event.phase == .changed || event.momentumPhase == .changed) && abs(deltaX) > 0 {
-                if let cgCopy = event.cgEvent?.copy() {
-                    cgCopy.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: 0)
-                    cgCopy.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: 0)
-                    if let filteredEvent = NSEvent(cgEvent: cgCopy) {
-                        super.scrollWheel(with: filteredEvent)
-                        return
-                    }
-                }
-            }
-            super.scrollWheel(with: event)
-            return
-
-        case .none:
-            // Anti-wobble guard for mid-stream events and momentum phases
-            if event.phase == .changed || event.momentumPhase == .changed {
-                if abs(deltaY) > abs(deltaX) * 1.2 && abs(deltaX) > 0 {
-                    // Predominantly vertical: zero out horizontal drift
-                    if let cgCopy = event.cgEvent?.copy() {
-                        cgCopy.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: 0)
-                        cgCopy.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: 0)
-                        if let filteredEvent = NSEvent(cgEvent: cgCopy) {
-                            super.scrollWheel(with: filteredEvent)
-                            return
-                        }
-                    }
-                } else if abs(deltaX) > abs(deltaY) * 2 && abs(deltaX) > 2 {
-                    if (deltaX > 0 && !tab.canGoBack) || (deltaX < 0 && !tab.canGoForward) {
-                        return // Suppress page wobble at edge
-                    }
-                }
-            }
-            super.scrollWheel(with: event)
-        }
-    }
 }
 
 // MARK: - Script Message Handler & Bridge

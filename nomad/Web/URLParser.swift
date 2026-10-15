@@ -78,9 +78,8 @@ enum URLParser {
         let parts = cleanHost.components(separatedBy: ".")
         guard parts.count >= 2, let tld = parts.last else { return false }
 
-        // Valid TLD check (letters only, at least 2 characters)
-        let tldRegex = "^[a-zA-Z]{2,63}$"
-        return tld.range(of: tldRegex, options: .regularExpression) != nil
+        // Valid TLD check (letters only, 2 to 63 characters)
+        return tld.count >= 2 && tld.count <= 63 && tld.allSatisfy { $0.isASCII && $0.isLetter }
     }
 
     /// Detects local development environments (localhost, 127.0.0.1, etc.)

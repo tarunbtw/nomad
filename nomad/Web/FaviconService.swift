@@ -105,6 +105,10 @@ final class FaviconService {
     }
 
     private func cleanHost(_ host: String) -> String {
-        host.lowercased().replacingOccurrences(of: "^www\\.", with: "", options: .regularExpression)
+        var h = host.lowercased()
+        if h.hasPrefix("www.") {
+            h.removeFirst(4)
+        }
+        return h
     }
 }

@@ -214,16 +214,6 @@ final class NomadAgentServer: ObservableObject {
             }
         }
 
-        // Origin Header Guard: block drive-by CSRF / DNS rebinding from arbitrary web browsers
-        if let origin = headers["origin"], !origin.isEmpty {
-            let allowedOrigins = ["http://127.0.0.1", "http://localhost", "nomad://"]
-            let isAllowed = allowedOrigins.contains { origin.starts(with: $0) }
-            if !isAllowed {
-                sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"Cross-origin request rejected from \(origin)\"}", origin: origin)
-                return
-            }
-        }
-
         // Extract body if present
         var bodyData: Data? = nil
         if let bodyRange = requestString.range(of: "\r\n\r\n") {

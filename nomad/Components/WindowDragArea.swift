@@ -18,11 +18,9 @@ struct WindowDragArea: NSViewRepresentable {
 }
 
 final class DragNSView: NSView {
-    private var pressed: NSEvent?
-    private var moved = false
     private static var didApplyInitialSize = false
 
-    override var mouseDownCanMoveWindow: Bool { false }
+    override var mouseDownCanMoveWindow: Bool { true }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -30,7 +28,6 @@ final class DragNSView: NSView {
         Lights.keep(window)
         
         window.isMovableByWindowBackground = false
-        window.isMovable = false
         
         if !Self.didApplyInitialSize {
             Self.didApplyInitialSize = true
@@ -40,26 +37,10 @@ final class DragNSView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        super.mouseDown(with: event)
-        pressed = event
-        moved = false
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard let window = window, let pressed = pressed, !moved else { return }
-        let dx = event.locationInWindow.x - pressed.locationInWindow.x
-        let dy = event.locationInWindow.y - pressed.locationInWindow.y
-        if abs(dx) < 3 && abs(dy) < 3 { return }
-        moved = true
-        window.isMovable = true
-        window.performDrag(with: pressed)
-        window.isMovable = false
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        super.mouseUp(with: event)
-        window?.isMovable = false
-        guard let window = window, !moved, event.clickCount == 2 else { return }
-        window.zoom(nil)
+        if event.clickCount == 2 {
+            window?.zoom(nil)
+        } else {
+            window?.performDrag(with: event)
+        }
     }
 }

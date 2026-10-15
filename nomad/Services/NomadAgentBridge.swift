@@ -53,11 +53,12 @@ struct NomadBounds: Codable {
     let y: CGFloat
     let width: CGFloat
     let height: CGFloat
+    var cgRect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
 /// Action request issued by an AI agent or DevX tool.
 struct NomadAction: Codable {
-    var action: String // "click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight"
+    var action: String = "click" // "click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight"
     var target: String? // e.g. "e1", "e2", or CSS selector fallback
     var text: String?
     var key: String? // "Enter", "Escape", "Tab", or chords "Meta+A", "Control+Enter"
@@ -76,48 +77,6 @@ struct NomadAction: Codable {
     var optionValue: String?
     var optionText: String?
     var modifiers: [String]?
-
-    init(
-        action: String,
-        target: String? = nil,
-        text: String? = nil,
-        key: String? = nil,
-        direction: String? = nil,
-        amount: CGFloat? = nil,
-        submit: Bool? = nil,
-        blur: Bool? = nil,
-        change: Bool? = nil,
-        force: Bool? = nil,
-        x: CGFloat? = nil,
-        y: CGFloat? = nil,
-        toX: CGFloat? = nil,
-        toY: CGFloat? = nil,
-        scrollDeltaY: CGFloat? = nil,
-        scrollDeltaX: CGFloat? = nil,
-        optionValue: String? = nil,
-        optionText: String? = nil,
-        modifiers: [String]? = nil
-    ) {
-        self.action = action
-        self.target = target
-        self.text = text
-        self.key = key
-        self.direction = direction
-        self.amount = amount
-        self.submit = submit
-        self.blur = blur
-        self.change = change
-        self.force = force
-        self.x = x
-        self.y = y
-        self.toX = toX
-        self.toY = toY
-        self.scrollDeltaY = scrollDeltaY
-        self.scrollDeltaX = scrollDeltaX
-        self.optionValue = optionValue
-        self.optionText = optionText
-        self.modifiers = modifiers
-    }
 
     enum CodingKeys: String, CodingKey {
         case action, type

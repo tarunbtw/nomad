@@ -155,11 +155,6 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
         if let item = item {
             item.progress = 1.0
             item.state = .completed
-            
-            // Apply macOS quarantine attribute for defense-in-depth security
-            if let dest = item.destinationURL {
-                applyQuarantineAttribute(to: dest, originURL: item.originalURL)
-            }
         }
     }
 
@@ -213,19 +208,6 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
         downloads.removeAll { $0.state != .downloading }
     }
 
-    // MARK: - Security: macOS Gatekeeper Quarantine (com.apple.quarantine)
-
-    private func applyQuarantineAttribute(to fileURL: URL, originURL: URL) {
-        let path = fileURL.path
-        let agentBundleId = Bundle.main.bundleIdentifier ?? "tarun.nomad"
-        let timestamp = String(format: "%08x", UInt32(Date().timeIntervalSince1970))
-        let uuid = UUID().uuidString
-        let quarantineValue = "0082;\(timestamp);\(agentBundleId);\(uuid)"
-        
-        quarantineValue.withCString { valuePtr in
-            _ = setxattr(path, "com.apple.quarantine", valuePtr, strlen(valuePtr), 0, 0)
-        }
-    }
 
     // MARK: - Destination Disambiguation
 
