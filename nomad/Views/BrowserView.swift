@@ -495,7 +495,11 @@ private struct EmptyStateView: View {
 
     private func submit() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
+        guard !trimmed.isEmpty else { return }
+        let parsed = URLParser.parse(trimmed)
+        if parsed.scheme == "nomad" && (parsed.host == "settings" || parsed.host == "tune") {
+            store.openSettings()
+        } else {
             tab.load(text: trimmed)
         }
     }

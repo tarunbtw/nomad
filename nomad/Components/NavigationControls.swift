@@ -148,7 +148,7 @@ struct NavigationControls: View {
             .opacity(canInspect ? 1.0 : 0.35)
             .help("Developer Tools (⌘⌥I)")
 
-            let isSettingsActive = tab.url?.host == "settings"
+            let isSettingsActive = tab.isInternalPage || tab.url?.scheme == "nomad" || tab.url?.host == "settings"
 
             Button(action: { store.openSettings() }) {
                 Image(systemName: isSettingsActive ? "gearshape.fill" : "gearshape")

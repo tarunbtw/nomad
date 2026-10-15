@@ -269,7 +269,12 @@ struct TabItemView: View {
     private func submitEdit() {
         let trimmed = editText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            tab.load(text: trimmed)
+            let parsed = URLParser.parse(trimmed)
+            if parsed.scheme == "nomad" && (parsed.host == "settings" || parsed.host == "tune") {
+                store.openSettings()
+            } else {
+                tab.load(text: trimmed)
+            }
         }
         isEditing = false
     }

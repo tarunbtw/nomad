@@ -48,6 +48,16 @@ final class BrowserStore: ObservableObject {
             }
         }
 
+        // Prevent opening duplicate settings tabs: switch to existing settings tab if present
+        if let targetURL = url, targetURL.scheme == "nomad", targetURL.host == "settings" || targetURL.host == "tune" {
+            if let existingSettings = tabs.first(where: { $0.isInternalPage || $0.url?.scheme == "nomad" || $0.url?.host == "settings" }) {
+                if select {
+                    selectTab(id: existingSettings.id)
+                }
+                return existingSettings
+            }
+        }
+
         let tab = Tab(initialURL: url, configuration: configuration, isIncognito: isIncognito, lazy: lazy)
         
         tab.onOpenURLInNewTab = { [weak self, weak tab] targetURL in
@@ -178,10 +188,10 @@ final class BrowserStore: ObservableObject {
             SettingsStore.shared.activeSection = section
         }
         let settingsURL = URL(string: "nomad://settings")!
-        if let current = activeTab, current.isBlank {
-            current.load(url: settingsURL)
-        } else if let existing = tabs.first(where: { $0.url?.host == "settings" }) {
+        if let existing = tabs.first(where: { $0.isInternalPage || $0.url?.scheme == "nomad" || $0.url?.host == "settings" }) {
             selectTab(id: existing.id)
+        } else if let current = activeTab, current.isBlank {
+            current.load(url: settingsURL)
         } else {
             newTab(url: settingsURL, select: true)
         }
@@ -195,7 +205,9 @@ final class BrowserStore: ObservableObject {
     /// Opens a bookmark in the current or new tab.
     func openBookmark(_ bookmark: Bookmark) {
         if let destination = URL(string: bookmark.url) {
-            if let current = activeTab, current.isBlank {
+            if destination.scheme == "nomad" && (destination.host == "settings" || destination.host == "tune") {
+                openSettings()
+            } else if let current = activeTab, current.isBlank {
                 current.load(url: destination)
             } else {
                 newTab(url: destination, select: true)
