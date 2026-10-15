@@ -38,7 +38,8 @@ function callNomad(method, pathStr, body = null) {
     return new Promise((resolve, reject) => {
         const payload = body ? JSON.stringify(body) : null;
         const token = getAgentToken();
-        const reqTimeout = Math.max(10000, ((body && (body.timeoutMs || body.durationMs)) || 0) + 5000);
+        const waitMs = (body && (body.timeoutMs || body.durationMs)) || 5000;
+        const reqTimeout = Math.max(30000, waitMs + 10000);
         const headers = {
             'Content-Type': 'application/json',
             ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
@@ -76,11 +77,15 @@ function callNomad(method, pathStr, body = null) {
 
         req.on('timeout', () => {
             req.destroy();
-            reject(new Error(`Timeout connecting to Nomad at http://${HOST}:${NOMAD_PORT}`));
+            reject(new Error(`Operation timed out after ${reqTimeout}ms waiting for response from Nomad (${method} ${pathStr}). Nomad is running, but the page operation exceeded the timeout.`));
         });
 
         req.on('error', (err) => {
-            reject(new Error(`Failed to connect to Nomad at http://${HOST}:${NOMAD_PORT} (${err.message}). Ensure Nomad browser is running.`));
+            if (err.code === 'ECONNREFUSED') {
+                reject(new Error(`Could not connect to Nomad at http://${HOST}:${NOMAD_PORT} (ECONNREFUSED). Nomad browser is not currently running.`));
+            } else {
+                reject(new Error(`Network error communicating with Nomad: ${err.message}`));
+            }
         });
 
         if (payload) {
@@ -177,10 +182,17 @@ const TOOLS = [
     },
     {
         name: 'nomad_snapshot',
-        description: 'Capture a token-optimized semantic perception tree (typically 200–1,200 tokens depending on page density, vs 50k–100k+ raw HTML). Extracts visible interactive elements, semantic headings (h1-h3), and images across light and Shadow DOM with assigned IDs ([e1], [e2], ...), bounding coordinates, tag names, roles, accessible text, image src URLs, and occlusion states.',
+        description: 'Capture a token-optimized semantic perception tree (typically 300–1,200 tokens depending on page density, vs 50k–100k+ raw HTML). Extracts visible interactive elements, semantic headings (h1-h3), text content (list items, paragraphs, table cells), and images across light and Shadow DOM with assigned IDs ([e1], [e2], ...), bounding coordinates, tag names, roles, accessible text, image src URLs, and occlusion states.',
         inputSchema: {
             type: 'object',
-            properties: {},
+            properties: {
+                limit: { type: 'number', description: 'Maximum number of elements to include in semantic tree (default 100)' },
+                offset: { type: 'number', description: 'Starting offset for element pagination in dense pages (default 0)' },
+                viewportOnly: { type: 'boolean', description: 'When true, only include elements currently inside the visible viewport' },
+                includeText: { type: 'boolean', description: 'When true (default), include non-interactive text content (li, p, td, th) for outcome verification' },
+                mode: { type: 'string', enum: ['text', 'json'], description: 'Perception output format. "text" returns compact markdown summary; "json" returns raw element array (default: "text")' },
+                tabId: { type: 'string', description: 'Optional tab UUID to inspect instead of the active tab' }
+            },
             additionalProperties: false
         }
     },
@@ -222,7 +234,8 @@ const TOOLS = [
                 scrollDeltaY: { type: 'number', description: 'Pixels to scroll down (positive) or up (negative) for "scroll"' },
                 scrollDeltaX: { type: 'number', description: 'Pixels to scroll right (positive) or left (negative) for "scroll"' },
                 direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Scroll direction fallback' },
-                amount: { type: 'number', description: 'Pixels to scroll for direction fallback' }
+                amount: { type: 'number', description: 'Pixels to scroll for direction fallback' },
+                tabId: { type: 'string', description: 'Optional target tab UUID' }
             },
             required: ['type'],
             additionalProperties: false
@@ -230,18 +243,22 @@ const TOOLS = [
     },
     {
         name: 'nomad_wait',
-        description: 'Wait for DOM mutation stability, a specific CSS selector to appear, or a timeout before continuing execution. Essential for SPAs (React, Next.js) to finish rendering.',
+        description: 'Wait for DOM mutation stability, a specific CSS selector to appear, network requests to become idle, navigation to complete, or a timeout before continuing execution.',
         inputSchema: {
             type: 'object',
             properties: {
                 mode: {
                     type: 'string',
-                    enum: ['stability', 'selector', 'timeout', 'stable', 'idle', 'domStable'],
+                    enum: ['stability', 'selector', 'timeout', 'networkidle', 'navigation', 'url'],
                     description: 'Wait mode. Default: stability.'
                 },
                 selector: {
                     type: 'string',
                     description: 'CSS selector to wait for (if provided, mode defaults to "selector")'
+                },
+                urlPattern: {
+                    type: 'string',
+                    description: 'Substring or regex pattern to wait for in active URL (for "navigation" or "url" mode)'
                 },
                 quietMs: {
                     type: 'number',
@@ -254,7 +271,12 @@ const TOOLS = [
                 durationMs: {
                     type: 'number',
                     description: 'Duration in milliseconds for "timeout" mode (default: 1000)'
-                }
+                },
+                idleMs: {
+                    type: 'number',
+                    description: 'Milliseconds of network silence required for "networkidle" (default: 500)'
+                },
+                tabId: { type: 'string', description: 'Optional target tab UUID' }
             },
             additionalProperties: false
         }
@@ -288,14 +310,30 @@ const TOOLS = [
     },
     {
         name: 'nomad_screenshot',
-        description: 'Capture a GPU screenshot of the active tab. Set labeled=true to overlay numbered element badges [1], [2] matching the semantic snapshot for vision-grounded models.',
+        description: 'Capture a GPU screenshot of the active tab. Set labeled=true to overlay numbered element badges [1], [2]. Set elementId (e.g. "e2") or clip to crop to a specific element or region for cheaper vision tokens.',
         inputSchema: {
             type: 'object',
             properties: {
                 labeled: {
                     type: 'boolean',
                     description: 'If true, renders vision-grounding element number badges over interactive nodes'
-                }
+                },
+                elementId: {
+                    type: 'string',
+                    description: 'Optional element ID from nomad_snapshot to crop screenshot to (e.g. "e2")'
+                },
+                clip: {
+                    type: 'object',
+                    properties: {
+                        x: { type: 'number' },
+                        y: { type: 'number' },
+                        width: { type: 'number' },
+                        height: { type: 'number' }
+                    },
+                    required: ['x', 'y', 'width', 'height'],
+                    description: 'Optional viewport coordinates rectangle to crop screenshot to'
+                },
+                tabId: { type: 'string', description: 'Optional target tab UUID' }
             },
             additionalProperties: false
         }
@@ -311,9 +349,55 @@ const TOOLS = [
                     type: 'string',
                     enum: ['page', 'isolated'],
                     description: 'Execution context world (default: page)'
-                }
+                },
+                tabId: { type: 'string', description: 'Optional target tab UUID' }
             },
             required: ['script'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'nomad_dialog',
+        description: 'Inspect the last JavaScript dialog (alert/confirm/prompt) or configure automated response policy ("accept" | "dismiss").',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                policy: {
+                    type: 'string',
+                    enum: ['accept', 'dismiss'],
+                    description: 'Response policy for window.confirm dialogs (default "accept")'
+                },
+                response: {
+                    type: 'string',
+                    description: 'Default text response for window.prompt dialogs'
+                }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'nomad_console',
+        description: 'Inspect recent console log messages (log, warn, error) emitted by the page. Useful for diagnosing frontend issues without blind waits.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                clear: { type: 'boolean', description: 'When true, clears the console log buffer after reading (default: false)' },
+                level: { type: 'string', enum: ['all', 'log', 'warn', 'error'], description: 'Filter by log level (default: all)' },
+                tabId: { type: 'string', description: 'Optional target tab UUID' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'nomad_network',
+        description: 'Inspect recent HTTP network requests (fetch/XHR) executed by the page, including methods, URLs, status codes, latencies, and errors.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                clear: { type: 'boolean', description: 'When true, clears the network log buffer after reading (default: false)' },
+                statusFilter: { type: 'string', enum: ['all', 'errors', 'success'], description: 'Filter requests (default: all)' },
+                tabId: { type: 'string', description: 'Optional target tab UUID' }
+            },
             additionalProperties: false
         }
     }
@@ -346,14 +430,35 @@ async function handleToolCall(name, args) {
             return formatToolResponse(res);
         }
         case 'nomad_snapshot': {
-            const res = await callNomad('GET', '/snapshot');
+            const qs = [];
+            if (args && args.limit !== undefined) qs.push(`limit=${encodeURIComponent(args.limit)}`);
+            if (args && args.offset !== undefined) qs.push(`offset=${encodeURIComponent(args.offset)}`);
+            if (args && args.viewportOnly) qs.push('viewportOnly=true');
+            if (args && args.includeText !== undefined) qs.push(`includeText=${encodeURIComponent(args.includeText)}`);
+            if (args && args.tabId) qs.push(`tabId=${encodeURIComponent(args.tabId)}`);
+            const pathStr = qs.length ? `/snapshot?${qs.join('&')}` : '/snapshot';
+            const res = await callNomad('GET', pathStr);
+            if (args && args.mode === 'json') {
+                return formatToolResponse(res, JSON.stringify(res, null, 2));
+            }
             const summary = res.summary || '';
             const tokens = res.tokenEstimate || 0;
             const text = `=== Nomad Semantic Perception ===\nTokens: ~${tokens}\nURL: ${res.url || ''}\nTitle: ${res.title || ''}\n\n${summary}`;
             return formatToolResponse(res, text);
         }
         case 'nomad_action': {
-            const res = await callNomad('POST', '/action', args);
+            let res = await callNomad('POST', '/action', args);
+            // Self-healing retry: if target not found or ref stale, refresh snapshot and retry once
+            if (res && res.success === false && args && args.elementId && !args._retried) {
+                try {
+                    await callNomad('GET', '/snapshot');
+                    const retryRes = await callNomad('POST', '/action', { ...args, _retried: true });
+                    if (retryRes && retryRes.success) {
+                        retryRes.healed = true;
+                        res = retryRes;
+                    }
+                } catch (e) {}
+            }
             return formatToolResponse(res);
         }
         case 'nomad_wait': {
@@ -363,12 +468,18 @@ async function handleToolCall(name, args) {
         case 'nomad_cookies': {
             const act = (args && args.action) || 'get';
             if (act === 'get') {
-                const qs = args && args.allDomains ? '?allDomains=true' : '';
-                const res = await callNomad('GET', `/cookies${qs}`);
+                const qs = [];
+                if (args && args.allDomains) qs.push('allDomains=true');
+                if (args && args.tabId) qs.push(`tabId=${encodeURIComponent(args.tabId)}`);
+                const qsStr = qs.length ? `?${qs.join('&')}` : '';
+                const res = await callNomad('GET', `/cookies${qsStr}`);
                 return formatToolResponse(res);
             } else if (act === 'clear') {
-                const qs = args && args.allDomains ? '?allDomains=true' : '';
-                const res = await callNomad('DELETE', `/cookies${qs}`);
+                const qs = [];
+                if (args && args.allDomains) qs.push('allDomains=true');
+                if (args && args.tabId) qs.push(`tabId=${encodeURIComponent(args.tabId)}`);
+                const qsStr = qs.length ? `?${qs.join('&')}` : '';
+                const res = await callNomad('DELETE', `/cookies${qsStr}`);
                 return formatToolResponse(res);
             } else {
                 const res = await callNomad('POST', '/cookies', args);
@@ -376,8 +487,15 @@ async function handleToolCall(name, args) {
             }
         }
         case 'nomad_screenshot': {
-            const isLabeled = Boolean(args && args.labeled);
-            const pathStr = isLabeled ? '/screenshot?labeled=true' : '/screenshot';
+            const qs = [];
+            if (args && args.labeled) qs.push('labeled=true');
+            if (args && args.elementId) qs.push(`elementId=${encodeURIComponent(args.elementId)}`);
+            if (args && args.clip) {
+                const c = args.clip;
+                qs.push(`clip=${c.x},${c.y},${c.width},${c.height}`);
+            }
+            if (args && args.tabId) qs.push(`tabId=${encodeURIComponent(args.tabId)}`);
+            const pathStr = qs.length ? `/screenshot?${qs.join('&')}` : '/screenshot';
             const res = await callNomad('GET', pathStr);
             if (res && res._rawImage) {
                 const b64 = res._rawImage.toString('base64');
@@ -394,6 +512,28 @@ async function handleToolCall(name, args) {
         }
         case 'nomad_evaluate': {
             const res = await callNomad('POST', '/evaluate', args);
+            return formatToolResponse(res);
+        }
+        case 'nomad_dialog': {
+            const res = await callNomad('POST', '/dialog', args);
+            return formatToolResponse(res);
+        }
+        case 'nomad_console': {
+            const qs = [];
+            if (args && args.clear) qs.push('clear=true');
+            if (args && args.level) qs.push(`level=${encodeURIComponent(args.level)}`);
+            if (args && args.tabId) qs.push(`tabId=${encodeURIComponent(args.tabId)}`);
+            const pathStr = qs.length ? `/console?${qs.join('&')}` : '/console';
+            const res = await callNomad('GET', pathStr);
+            return formatToolResponse(res);
+        }
+        case 'nomad_network': {
+            const qs = [];
+            if (args && args.clear) qs.push('clear=true');
+            if (args && args.statusFilter) qs.push(`statusFilter=${encodeURIComponent(args.statusFilter)}`);
+            if (args && args.tabId) qs.push(`tabId=${encodeURIComponent(args.tabId)}`);
+            const pathStr = qs.length ? `/network?${qs.join('&')}` : '/network';
+            const res = await callNomad('GET', pathStr);
             return formatToolResponse(res);
         }
         default:

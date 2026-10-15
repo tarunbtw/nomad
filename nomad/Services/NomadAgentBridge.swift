@@ -16,6 +16,7 @@ struct NomadSnapshot: Codable {
     let url: String
     let viewportWidth: CGFloat
     let viewportHeight: CGFloat
+    var totalElements: Int?
     let elements: [NomadElement]
     /// Pre-formatted dense semantic tree for LLM prompt ingestion (~300 tokens).
     let summary: String
@@ -34,6 +35,7 @@ struct NomadElement: Codable {
     var className: String?
     var rank: String?
     var isObscured: Bool?
+    var inViewport: Bool?
     var disabled: Bool?
     var checked: Bool?
     var selected: Bool?
@@ -198,7 +200,13 @@ enum NomadDOMScript {
             elements: {},
 
             // 1. Scans visible interactive targets across Light and Shadow DOM
-            getSemanticTree: function() {
+            getSemanticTree: function(options) {
+                options = options || {};
+                var limit = options.limit !== undefined ? Number(options.limit) : 100;
+                var offset = options.offset !== undefined ? Number(options.offset) : 0;
+                var viewportOnly = Boolean(options.viewportOnly);
+                var includeText = options.includeText !== undefined ? Boolean(options.includeText) : true;
+
                 this.elements = {};
                 var results = [];
                 var counter = 1;
@@ -209,7 +217,7 @@ enum NomadDOMScript {
                 // Recursive collector penetrating open Shadow DOM roots and same-origin / srcdoc iframes
                 function collectNodes(root, list) {
                     if (!root) return;
-                    var selector = 'a, button, input, textarea, select, details, summary, h1, h2, h3, img, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [role="heading"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"], iframe';
+                    var selector = 'a, button, input, textarea, select, details, summary, h1, h2, h3, img, li, p, td, th, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [role="heading"], [role="listitem"], [role="status"], [role="alert"], [role="cell"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"], iframe';
                     try {
                         var found = root.querySelectorAll(selector);
                         for (var i = 0; i < found.length; i++) {
@@ -229,11 +237,23 @@ enum NomadDOMScript {
                     } catch(e) {}
                 }
 
+                // Sensitive field detection (passwords, credit cards, CVVs, SSNs, tokens)
+                function isSensitiveField(el) {
+                    if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') return false;
+                    if (el.type === 'password') return true;
+                    var hint = (el.name + ' ' + el.id + ' ' + (el.autocomplete || '') + ' ' + (el.placeholder || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+                    var sensitive = ['card', 'cvv', 'cvc', 'ssn', 'social-security', 'secret', 'token', 'passcode', 'credit-card', 'cc-number'];
+                    for (var s = 0; s < sensitive.length; s++) {
+                        if (hint.indexOf(sensitive[s]) !== -1) return true;
+                    }
+                    return false;
+                }
+
                 // Resolve accessible label using ARIA, label tags, placeholder, title, adjacent labels, and text
                 function getAccessibleLabel(el) {
                     try {
-                        // Strict redaction of password inputs: NEVER return value or text
-                        if (el.tagName === 'INPUT' && el.type === 'password') {
+                        // Strict redaction of password and sensitive inputs: NEVER return value or prefilled text
+                        if (isSensitiveField(el)) {
                             if (el.getAttribute('aria-label')) return el.getAttribute('aria-label').trim();
                             if (el.placeholder) return el.placeholder.trim();
                             if (el.id) {
@@ -278,7 +298,7 @@ enum NomadDOMScript {
                         if (el.tagName === 'INPUT' && (el.type === 'submit' || el.type === 'button') && el.value) {
                             return String(el.value).trim();
                         }
-                        var fallbackVal = (el.tagName === 'INPUT' && el.type === 'password') ? '' : (el.value || '');
+                        var fallbackVal = isSensitiveField(el) ? '' : (el.value || '');
                         return (el.innerText || el.textContent || fallbackVal).trim();
                     } catch(e) {
                         return '';
@@ -311,10 +331,8 @@ enum NomadDOMScript {
                     var rect = el.getBoundingClientRect();
                     var isInputToggle = (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio'));
 
-                    // Visibility checks: geometry and viewport boundary
-                    // Note: Custom styled checkboxes/radios often use opacity:0 with layout preserved
+                    // Geometry check: elements with zero size are non-rendered
                     if (!isInputToggle && (rect.width <= 0 || rect.height <= 0)) continue;
-                    if (rect.bottom < -50 || rect.top > vpH + 50 || rect.right < -50 || rect.left > vpW + 50) continue;
 
                     var style = window.getComputedStyle(el);
                     if (style.display === 'none' || style.visibility === 'hidden') continue;
@@ -325,9 +343,18 @@ enum NomadDOMScript {
                     var tag = el.tagName.toLowerCase();
                     var role = el.getAttribute('role') || tag;
                     var type = el.getAttribute('type') || null;
-                    var val = (el.value !== undefined && el.value !== '' && el.type !== 'password') ? String(el.value).substring(0, 50) : null;
+
+                    var isSensitive = isSensitiveField(el);
+                    var val = null;
+                    if (isSensitive) {
+                        if (el.value) val = '[REDACTED]';
+                    } else if (el.value !== undefined && el.value !== '') {
+                        val = String(el.value).substring(0, 50);
+                    }
+
                     var isHeading = (tag === 'h1' || tag === 'h2' || tag === 'h3' || el.getAttribute('role') === 'heading');
                     var isImg = (tag === 'img');
+                    var isTextNode = (tag === 'li' || tag === 'p' || tag === 'td' || tag === 'th' || role === 'listitem' || role === 'status' || role === 'alert' || role === 'cell');
 
                     // Filter out meaningless whitespace links or empty non-interactive anchors
                     if ((tag === 'a' || tag === 'button') && !text && !val && !el.querySelector('img, svg')) {
@@ -335,6 +362,16 @@ enum NomadDOMScript {
                     }
                     if (isHeading && !text) {
                         continue;
+                    }
+                    if (isTextNode) {
+                        if (!includeText || (!text && !val)) continue;
+                        // Skip parent container if an interactive child already has identical text
+                        var childControl = el.querySelector('a, button, input, textarea, select');
+                        if (childControl) {
+                            var cTxt = (childControl.innerText || childControl.textContent || '').trim();
+                            var pTxt = (el.innerText || el.textContent || '').trim();
+                            if (cTxt && pTxt === cTxt) continue;
+                        }
                     }
                     var src = isImg ? (el.currentSrc || el.src || el.getAttribute('src') || null) : null;
                     var alt = isImg ? (el.alt || el.getAttribute('alt') || null) : null;
@@ -345,9 +382,13 @@ enum NomadDOMScript {
                         text = alt.substring(0, 80);
                     }
 
+                    // Assign persistent, deterministic id in document order
                     var id = 'e' + counter++;
                     this.elements[id] = el;
                     try { el.setAttribute('data-nomad-id', id); } catch(e) {}
+
+                    // In-viewport check (top/bottom/left/right relative to viewport)
+                    var inViewport = (rect.bottom >= 0 && rect.top <= vpH && rect.right >= 0 && rect.left <= vpW);
 
                     // Occlusion Hit-Testing (Center Point Check)
                     var isObscured = false;
@@ -387,6 +428,7 @@ enum NomadDOMScript {
                         className: cls,
                         rank: itemRank,
                         isObscured: isObscured,
+                        inViewport: inViewport,
                         disabled: disabled,
                         checked: checked,
                         selected: selected,
@@ -405,22 +447,43 @@ enum NomadDOMScript {
                     });
                 }
 
+                // Filter elements for summary if viewportOnly is specified
+                var summaryCandidates = results;
+                if (viewportOnly) {
+                    summaryCandidates = results.filter(function(item) { return item.inViewport; });
+                }
+
+                var totalCount = summaryCandidates.length;
+                var pagedItems = summaryCandidates.slice(offset, offset + limit);
+
                 // Build compact markdown semantic summary for LLM prompt ingestion
                 var summaryLines = [
                     '[Page: ' + (document.title || 'Untitled') + ' | URL: ' + window.location.href + ']',
-                    'Semantic Elements (' + results.length + '):'
+                    'Interactive Elements (' + pagedItems.length + ' of ' + totalCount + (totalCount > limit ? ' | pass limit/offset for more' : '') + '):'
                 ];
 
-                for (var j = 0; j < results.length; j++) {
-                    var item = results[j];
+                for (var j = 0; j < pagedItems.length; j++) {
+                    var item = pagedItems[j];
                     var desc = '[' + item.id + ']';
                     if (item.rank) desc += ' #' + item.rank;
                     desc += ' <' + item.tag;
                     if (item.type) desc += ' type="' + item.type + '"';
                     if (item.role && item.role !== item.tag) desc += ' role="' + item.role + '"';
-                    if (item.href) desc += ' href="' + item.href + '"';
-                    if (item.src) desc += ' src="' + item.src + '"';
-                    if (item.className) desc += ' class="' + item.className + '"';
+                    if (item.href) {
+                        var h = item.href;
+                        if (h.length > 50) h = h.substring(0, 47) + '...';
+                        desc += ' href="' + h + '"';
+                    }
+                    if (item.src) {
+                        var s = item.src;
+                        if (s.length > 40) s = s.substring(0, 37) + '...';
+                        desc += ' src="' + s + '"';
+                    }
+                    if (item.className) {
+                        var c = item.className;
+                        if (c.length > 25) c = c.substring(0, 22) + '...';
+                        desc += ' class="' + c + '"';
+                    }
                     if (item.text) desc += ' "' + item.text + '"';
                     if (item.value) desc += ' value="' + item.value + '"';
                     if (item.checked) desc += ' checked';
@@ -428,9 +491,14 @@ enum NomadDOMScript {
                     if (item.selected) desc += ' selected';
                     if (item.focused) desc += ' focused';
                     if (item.isInShadowRoot) desc += ' shadow';
+                    if (!item.inViewport) desc += ' (offscreen)';
                     desc += '>';
                     if (item.isObscured) desc += ' (obscured)';
                     summaryLines.push(desc);
+                }
+
+                if (offset + limit < totalCount) {
+                    summaryLines.push('[... and ' + (totalCount - (offset + limit)) + ' more elements. Call nomad_snapshot with offset=' + (offset + limit) + ']');
                 }
 
                 var fullSummary = summaryLines.join('\\n');
@@ -441,7 +509,8 @@ enum NomadDOMScript {
                     url: window.location.href,
                     viewportWidth: vpW,
                     viewportHeight: vpH,
-                    elements: results,
+                    totalElements: results.length,
+                    elements: pagedItems,
                     summary: fullSummary,
                     tokenEstimate: tokenEst
                 };
@@ -796,26 +865,29 @@ enum NomadDOMScript {
                     var timer = null;
                     var observer = null;
                     var mutationCount = 0;
+                    var resolved = false;
+
+                    function done(res) {
+                        if (resolved) return;
+                        resolved = true;
+                        if (maxTimer) clearTimeout(maxTimer);
+                        if (timer) clearTimeout(timer);
+                        if (observer) {
+                            try { observer.disconnect(); } catch(e) {}
+                        }
+                        resolve(res);
+                    }
 
                     var maxTimer = setTimeout(function() {
-                        cleanup();
-                        resolve({ success: false, reason: 'timeout', message: 'Exceeded max wait of ' + maxWait + 'ms (' + mutationCount + ' mutations)' });
+                        done({ success: false, reason: 'timeout', message: 'Exceeded max wait of ' + maxWait + 'ms (' + mutationCount + ' mutations)' });
                     }, maxWait);
 
                     function resetTimer() {
+                        if (resolved) return;
                         if (timer) clearTimeout(timer);
                         timer = setTimeout(function() {
-                            cleanup();
-                            requestAnimationFrame(function() {
-                                resolve({ success: true, message: 'DOM stabilized for ' + quiet + 'ms (' + mutationCount + ' mutations observed)', mutations: mutationCount });
-                            });
+                            done({ success: true, message: 'DOM stabilized for ' + quiet + 'ms (' + mutationCount + ' mutations observed)', mutations: mutationCount });
                         }, quiet);
-                    }
-
-                    function cleanup() {
-                        if (maxTimer) clearTimeout(maxTimer);
-                        if (timer) clearTimeout(timer);
-                        if (observer) observer.disconnect();
                     }
 
                     try {
@@ -853,9 +925,12 @@ extension Tab {
 
     /// Extracts a dense, token-efficient semantic tree and element index from the active page.
     @MainActor
-    func getSemanticTree() async throws -> NomadSnapshot {
+    func getSemanticTree(limit: Int = 100, offset: Int = 0, viewportOnly: Bool = false, includeText: Bool = true) async throws -> NomadSnapshot {
         await ensureNomadScriptInjected()
-        let jsonString = try await webView.evaluateJavaScript("JSON.stringify(window.__nomad.getSemanticTree())") as? String ?? "{}"
+        let opts: [String: Any] = ["limit": limit, "offset": offset, "viewportOnly": viewportOnly, "includeText": includeText]
+        let optsData = (try? JSONSerialization.data(withJSONObject: opts)) ?? Data()
+        let optsJSON = String(data: optsData, encoding: .utf8) ?? "{}"
+        let jsonString = try await webView.evaluateJavaScript("JSON.stringify(window.__nomad.getSemanticTree(\(optsJSON)))") as? String ?? "{}"
         guard let data = jsonString.data(using: .utf8) else {
             throw NSError(domain: "NomadAgent", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse snapshot JSON"])
         }
@@ -880,10 +955,15 @@ extension Tab {
     /// Waits for DOM mutation quiescence (stability) on the active page.
     @MainActor
     func waitForStability(quietMs: Int = 250, timeoutMs: Int = 5000) async throws -> [String: Any] {
-        // If webView is still loading, wait for initial document load
         let start = Date()
-        while webView.isLoading && Date().timeIntervalSince(start) < (Double(timeoutMs) / 1000.0) {
+        let timeoutSeconds = Double(timeoutMs) / 1000.0
+        while webView.isLoading && Date().timeIntervalSince(start) < timeoutSeconds {
             try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        }
+        let elapsed = Int(Date().timeIntervalSince(start) * 1000.0)
+        let remainingTimeout = max(50, timeoutMs - elapsed)
+        if remainingTimeout <= 50 && timeoutMs > 50 {
+            return ["success": false, "reason": "timeout", "message": "Exceeded max wait of \(timeoutMs)ms (page still loading)"]
         }
         await ensureNomadScriptInjected()
         let script = """
@@ -892,44 +972,48 @@ extension Tab {
         }
         return await window.__nomad.waitForStability(quietMs, timeoutMs);
         """
-        do {
-            return try await withCheckedThrowingContinuation { continuation in
-                webView.callAsyncJavaScript(script, arguments: ["quietMs": quietMs, "timeoutMs": timeoutMs], in: nil, in: .page) { result in
-                    switch result {
-                    case .success(let val):
-                        if let dict = val as? [String: Any] {
-                            continuation.resume(returning: dict)
-                        } else {
-                            continuation.resume(returning: ["success": true, "message": "DOM stabilized"])
-                        }
-                    case .failure(let error):
-                        let nsErr = error as NSError
-                        if nsErr.domain == "WKErrorDomain" && nsErr.code == 4 { // WKErrorJavaScriptExceptionOccurred during page navigation
-                            continuation.resume(returning: ["success": true, "message": "Document navigated"])
-                        } else {
-                            continuation.resume(throwing: error)
+        return try await withThrowingTaskGroup(of: [String: Any].self) { group in
+            group.addTask { @MainActor in
+                try await withCheckedThrowingContinuation { continuation in
+                    self.webView.callAsyncJavaScript(script, arguments: ["quietMs": quietMs, "timeoutMs": remainingTimeout], in: nil, in: .page) { result in
+                        switch result {
+                        case .success(let val):
+                            if let dict = val as? [String: Any] {
+                                continuation.resume(returning: dict)
+                            } else {
+                                continuation.resume(returning: ["success": true, "message": "DOM stabilized"])
+                            }
+                        case .failure(let error):
+                            let nsErr = error as NSError
+                            if nsErr.domain == "WKErrorDomain" && nsErr.code == 4 { // WKErrorJavaScriptExceptionOccurred during page navigation
+                                continuation.resume(returning: ["success": true, "message": "Document navigated"])
+                            } else {
+                                continuation.resume(throwing: error)
+                            }
                         }
                     }
                 }
             }
-        } catch {
-            return ["success": true, "message": "DOM ready fallback"]
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(remainingTimeout + 300) * 1_000_000)
+                return ["success": false, "reason": "timeout", "message": "Exceeded max wait of \(timeoutMs)ms"]
+            }
+            let firstResult = try await group.next()!
+            group.cancelAll()
+            return firstResult
         }
     }
 
     /// Captures a crisp screenshot directly from WebKit's in-memory compositing buffer (GPU RAM).
     /// If `labeled` is true, temporary visual index badges are overlaid to ground Vision LLMs.
+    /// If `elementId` or `clip` is provided, captures only the cropped element/region.
     @MainActor
-    func captureScreenshot(labeled: Bool = false) async throws -> NSImage {
+    func captureScreenshot(labeled: Bool = false, elementId: String? = nil, clip: CGRect? = nil) async throws -> NSImage {
         // Ensure pending layout, paint, and animation frames are flushed so WebKit doesn't snap a blank frame on SPAs/canvas
         _ = try? await webView.evaluateJavaScript("""
         new Promise(function(resolve) {
-            requestAnimationFrame(function() {
-                requestAnimationFrame(function() {
-                    if (document.body) { void document.body.offsetHeight; }
-                    resolve(true);
-                });
-            });
+            if (document.body) { void document.body.offsetHeight; }
+            resolve(true);
         })
         """)
 
@@ -938,7 +1022,35 @@ extension Tab {
             _ = try? await webView.evaluateJavaScript("window.__nomad.getSemanticTree(); window.__nomad.showBadges();")
         }
 
+        var targetRect: CGRect? = clip
+        if targetRect == nil, let elId = elementId {
+            await ensureNomadScriptInjected()
+            let rectScript = """
+            (function() {
+                var el = window.__nomad && window.__nomad.elements && window.__nomad.elements['\(elId)'];
+                if (!el) { el = document.querySelector('[data-nomad-id="\(elId)"]'); }
+                if (el) {
+                    var r = el.getBoundingClientRect();
+                    return { x: r.left, y: r.top, width: r.width, height: r.height };
+                }
+                return null;
+            })()
+            """
+            if let dict = (try? await webView.evaluateJavaScript(rectScript)) as? [String: Any],
+               let x = (dict["x"] as? NSNumber)?.doubleValue,
+               let y = (dict["y"] as? NSNumber)?.doubleValue,
+               let w = (dict["width"] as? NSNumber)?.doubleValue,
+               let h = (dict["height"] as? NSNumber)?.doubleValue,
+               w > 0 && h > 0 {
+                targetRect = CGRect(x: x, y: y, width: w, height: h)
+            }
+        }
+
         let config = WKSnapshotConfiguration()
+        if let rect = targetRect {
+            config.rect = rect
+        }
+
         let image = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<NSImage, Error>) in
             self.webView.takeSnapshot(with: config) { img, err in
                 if let err = err {

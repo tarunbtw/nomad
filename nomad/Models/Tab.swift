@@ -139,6 +139,8 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     @Published var swipeState: SwipeGestureState? = nil
     @Published var lastNavigationError: String? = nil
     @Published var lastDialog: String? = nil
+    @Published var dialogPolicy: String = "accept"
+    @Published var dialogPromptResponse: String = ""
     
     /// The retained custom web view for this tab.
     private(set) var webView: BrowserWebView
@@ -870,15 +872,17 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
-        self.lastDialog = message
-        appendConsoleEntry(level: .info, message: "[Dialog Confirm] \(message) -> Accepted")
-        completionHandler(true)
+        let shouldAccept = (dialogPolicy.lowercased() != "dismiss")
+        self.lastDialog = "[Confirm: \(message)] -> \(shouldAccept ? "accepted" : "dismissed")"
+        appendConsoleEntry(level: .info, message: "[Dialog Confirm] \(message) -> \(shouldAccept ? "Accepted" : "Dismissed")")
+        completionHandler(shouldAccept)
     }
 
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
-        self.lastDialog = prompt
-        appendConsoleEntry(level: .info, message: "[Dialog Prompt] \(prompt)")
-        completionHandler(defaultText ?? "")
+        let resp = dialogPromptResponse.isEmpty ? (defaultText ?? "") : dialogPromptResponse
+        self.lastDialog = "[Prompt: \(prompt)] -> \"\(resp)\""
+        appendConsoleEntry(level: .info, message: "[Dialog Prompt] \(prompt) -> \"\(resp)\"")
+        completionHandler(resp)
     }
 }
 

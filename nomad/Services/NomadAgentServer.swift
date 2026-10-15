@@ -255,6 +255,13 @@ final class NomadAgentServer: ObservableObject {
             }
         }
 
+        func resolveTab(id: String?) -> Tab? {
+            if let id = id, let uuid = UUID(uuidString: id) {
+                return store.tabs.first(where: { $0.id == uuid })
+            }
+            return store.activeTab
+        }
+
         switch (method, path) {
         case ("GET", "/"), ("GET", "/status"):
             let statusObj: [String: Any] = [
@@ -265,7 +272,7 @@ final class NomadAgentServer: ObservableObject {
                 "activeTabId": store.activeTabId?.uuidString ?? "",
                 "activeURL": store.activeTab?.url?.absoluteString ?? "",
                 "activeTitle": store.activeTab?.title ?? "",
-                "lastDialog": store.activeTab?.lastDialog ?? NSNull()
+                "lastDialog": (store.activeTab?.lastDialog as Any?) ?? NSNull()
             ]
             sendJSON(connection: connection, object: statusObj, origin: origin)
 
@@ -416,23 +423,31 @@ final class NomadAgentServer: ObservableObject {
             sendJSON(connection: connection, object: ["success": true, "action": "reload"], origin: origin)
 
         case ("POST", "/wait"):
-            guard let activeTab = store.activeTab else {
-                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}", origin: origin)
-                return
-            }
+            var targetTab: Tab? = store.activeTab
             var mode = "stability"
             var quietMs = 250
             var timeoutMs = 5000
             var durationMs = 1000
             var selector = ""
+            var urlPattern = ""
+            var idleMs = 500
 
             if let bodyData = bodyData,
                let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
+                if let tid = json["tabId"] as? String { targetTab = resolveTab(id: tid) }
                 if let m = json["mode"] as? String { mode = m.lowercased() }
                 if let q = json["quietMs"] as? Int { quietMs = q }
                 if let t = json["timeoutMs"] as? Int { timeoutMs = t }
                 if let d = json["durationMs"] as? Int { durationMs = d }
                 if let s = json["selector"] as? String { selector = s }
+                if let u = json["urlPattern"] as? String { urlPattern = u }
+                if let u = json["url"] as? String, urlPattern.isEmpty { urlPattern = u }
+                if let i = json["idleMs"] as? Int { idleMs = i }
+            }
+
+            guard let activeTab = targetTab else {
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}", origin: origin)
+                return
             }
 
             // Auto-infer selector mode if selector string is present
@@ -490,6 +505,41 @@ final class NomadAgentServer: ObservableObject {
                 } catch {
                     sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}", origin: origin)
                 }
+
+            case "networkidle", "network_idle":
+                let startTime = Date()
+                var lastActivity = Date()
+                var prevCount = activeTab.networkEntries.count
+                while Date().timeIntervalSince(startTime) < (Double(timeoutMs) / 1000.0) {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    let currentCount = activeTab.networkEntries.count
+                    if currentCount != prevCount {
+                        prevCount = currentCount
+                        lastActivity = Date()
+                    } else if Date().timeIntervalSince(lastActivity) >= (Double(idleMs) / 1000.0) && !activeTab.isLoading {
+                        sendJSON(connection: connection, object: ["success": true, "message": "Network idle for \(idleMs)ms", "requests": currentCount], origin: origin)
+                        return
+                    }
+                }
+                sendJSON(connection: connection, object: ["success": false, "reason": "timeout", "message": "Exceeded max wait of \(timeoutMs)ms waiting for network idle"], origin: origin)
+
+            case "navigation", "url":
+                let expectedPattern = !urlPattern.isEmpty ? urlPattern : selector
+                let startTime = Date()
+                while Date().timeIntervalSince(startTime) < (Double(timeoutMs) / 1000.0) {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    let curUrl = activeTab.url?.absoluteString ?? ""
+                    if !expectedPattern.isEmpty {
+                        if curUrl.contains(expectedPattern) && !activeTab.isLoading {
+                            sendJSON(connection: connection, object: ["success": true, "message": "Navigated to \(curUrl)", "url": curUrl], origin: origin)
+                            return
+                        }
+                    } else if !activeTab.isLoading {
+                        sendJSON(connection: connection, object: ["success": true, "message": "Navigation finished", "url": curUrl], origin: origin)
+                        return
+                    }
+                }
+                sendJSON(connection: connection, object: ["success": false, "reason": "timeout", "message": "Exceeded max wait of \(timeoutMs)ms waiting for navigation"], origin: origin)
 
             case "timeout", "sleep", "delay":
                 try? await Task.sleep(nanoseconds: UInt64(durationMs) * 1_000_000)
@@ -593,31 +643,88 @@ final class NomadAgentServer: ObservableObject {
             sendJSON(connection: connection, object: ["success": true, "deletedCount": deletedCount], origin: origin)
 
         case ("GET", "/snapshot"):
-            guard let activeTab = store.activeTab else {
+            let tabIdStr = URLComponents(string: "?" + queryString)?.queryItems?.first(where: { $0.name == "tabId" })?.value
+            guard let activeTab = resolveTab(id: tabIdStr) else {
                 sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}", origin: origin)
                 return
             }
+            var limit = 100
+            var offset = 0
+            var viewportOnly = false
+            var includeText = true
+            if let qItems = URLComponents(string: "?" + queryString)?.queryItems {
+                for item in qItems {
+                    if item.name == "limit", let v = item.value, let intV = Int(v) { limit = intV }
+                    if item.name == "offset", let v = item.value, let intV = Int(v) { offset = intV }
+                    if item.name == "viewportOnly", let v = item.value { viewportOnly = (v == "true" || v == "1") }
+                    if item.name == "includeText", let v = item.value { includeText = (v != "false" && v != "0") }
+                }
+            }
+            if let bodyData = bodyData,
+               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
+                if let l = json["limit"] as? Int { limit = l }
+                if let o = json["offset"] as? Int { offset = o }
+                if let v = json["viewportOnly"] as? Bool { viewportOnly = v }
+                if let it = json["includeText"] as? Bool { includeText = it }
+            }
             do {
-                let snapshot = try await activeTab.getSemanticTree()
+                let snapshot = try await activeTab.getSemanticTree(limit: limit, offset: offset, viewportOnly: viewportOnly, includeText: includeText)
                 let data = try JSONEncoder().encode(snapshot)
                 sendRaw(connection: connection, contentType: "application/json; charset=utf-8", data: data, origin: origin)
             } catch {
                 sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}", origin: origin)
             }
 
-        case ("GET", "/screenshot"), ("POST", "/screenshot"):
+        case ("POST", "/dialog"):
             guard let activeTab = store.activeTab else {
                 sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}", origin: origin)
                 return
             }
+            if let bodyData = bodyData,
+               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
+                if let policy = json["policy"] as? String {
+                    activeTab.dialogPolicy = policy
+                }
+                if let response = json["response"] as? String {
+                    activeTab.dialogPromptResponse = response
+                }
+            }
+            sendJSON(connection: connection, object: [
+                "success": true,
+                "policy": activeTab.dialogPolicy,
+                "promptResponse": activeTab.dialogPromptResponse,
+                "lastDialog": (activeTab.lastDialog as Any?) ?? NSNull()
+            ], origin: origin)
+
+        case ("GET", "/screenshot"), ("POST", "/screenshot"):
+            let tabIdStr = URLComponents(string: "?" + queryString)?.queryItems?.first(where: { $0.name == "tabId" })?.value
+            guard let activeTab = resolveTab(id: tabIdStr) else {
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}", origin: origin)
+                return
+            }
             var isLabeled = queryString.contains("labeled=true")
-            if !isLabeled, let bodyData = bodyData,
-               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any],
-               let labeledBool = json["labeled"] as? Bool {
-                isLabeled = labeledBool
+            var elementId: String? = URLComponents(string: "?" + queryString)?.queryItems?.first(where: { $0.name == "elementId" || $0.name == "ref" })?.value
+            var clipRect: CGRect? = nil
+            if let clipStr = URLComponents(string: "?" + queryString)?.queryItems?.first(where: { $0.name == "clip" })?.value {
+                let parts = clipStr.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+                if parts.count == 4 {
+                    clipRect = CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
+                }
+            }
+            if let bodyData = bodyData,
+               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
+                if let labeledBool = json["labeled"] as? Bool { isLabeled = labeledBool }
+                if let elId = json["elementId"] as? String { elementId = elId }
+                if let clipDict = json["clip"] as? [String: Any],
+                   let x = (clipDict["x"] as? NSNumber)?.doubleValue,
+                   let y = (clipDict["y"] as? NSNumber)?.doubleValue,
+                   let w = (clipDict["width"] as? NSNumber)?.doubleValue,
+                   let h = (clipDict["height"] as? NSNumber)?.doubleValue {
+                    clipRect = CGRect(x: x, y: y, width: w, height: h)
+                }
             }
             do {
-                let image = try await activeTab.captureScreenshot(labeled: isLabeled)
+                let image = try await activeTab.captureScreenshot(labeled: isLabeled, elementId: elementId, clip: clipRect)
                 if let png = image.pngData {
                     sendRaw(connection: connection, contentType: "image/png", data: png, origin: origin)
                 } else {
@@ -628,7 +735,13 @@ final class NomadAgentServer: ObservableObject {
             }
 
         case ("POST", "/action"):
-            guard let activeTab = store.activeTab else {
+            var targetTab: Tab? = store.activeTab
+            if let bodyData = bodyData,
+               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any],
+               let tid = json["tabId"] as? String {
+                targetTab = resolveTab(id: tid)
+            }
+            guard let activeTab = targetTab else {
                 sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}", origin: origin)
                 return
             }
@@ -646,7 +759,13 @@ final class NomadAgentServer: ObservableObject {
             }
 
         case ("POST", "/evaluate"):
-            guard let activeTab = store.activeTab else {
+            var targetTab: Tab? = store.activeTab
+            if let bodyData = bodyData,
+               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any],
+               let tid = json["tabId"] as? String {
+                targetTab = resolveTab(id: tid)
+            }
+            guard let activeTab = targetTab else {
                 sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}", origin: origin)
                 return
             }
@@ -660,18 +779,26 @@ final class NomadAgentServer: ObservableObject {
             let contentWorld: WKContentWorld = (worldParam == "isolated") ? .defaultClient : .page
 
             let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
-            let wrappedScript: String
-            if trimmed.starts(with: "return ") || trimmed.starts(with: "return\n") {
-                wrappedScript = trimmed
-            } else {
-                wrappedScript = """
+            let wrappedScript = """
+            return await (async () => {
                 try {
-                    return await (async () => (\(trimmed)))();
-                } catch(e) {
-                    return await (async () => { \(trimmed) })();
+                    var __nomad_res;
+                    try {
+                        __nomad_res = await (async () => (\(trimmed)))();
+                    } catch(__syntax_err) {
+                        __nomad_res = await (async () => { \(trimmed) })();
+                    }
+                    return { __nomad_ok: true, value: __nomad_res };
+                } catch(__nomad_eval_err) {
+                    return {
+                        __nomad_ok: false,
+                        error: (__nomad_eval_err && __nomad_eval_err.message) ? __nomad_eval_err.message : String(__nomad_eval_err),
+                        stack: (__nomad_eval_err && __nomad_eval_err.stack) ? __nomad_eval_err.stack : null,
+                        name: (__nomad_eval_err && __nomad_eval_err.name) ? __nomad_eval_err.name : 'Error'
+                    };
                 }
-                """
-            }
+            })();
+            """
             do {
                 let evalResult: Any? = try await withCheckedThrowingContinuation { continuation in
                     activeTab.webView.callAsyncJavaScript(wrappedScript, arguments: [:], in: nil, in: contentWorld) { result in
@@ -684,8 +811,27 @@ final class NomadAgentServer: ObservableObject {
                     }
                 }
 
+                if let dict = evalResult as? [String: Any], dict["__nomad_ok"] as? Bool == false {
+                    let errMsg = dict["error"] as? String ?? "JavaScript evaluation failed"
+                    let errStack = dict["stack"] as? String
+                    let errName = dict["name"] as? String ?? "EVAL_ERROR"
+                    var resp: [String: Any] = [
+                        "success": false,
+                        "error": errMsg,
+                        "code": errName
+                    ]
+                    if let stack = errStack { resp["stack"] = stack }
+                    sendJSON(connection: connection, object: resp, origin: origin)
+                    return
+                }
+
+                var rawValue: Any? = evalResult
+                if let dict = evalResult as? [String: Any], dict["__nomad_ok"] as? Bool == true {
+                    rawValue = dict["value"]
+                }
+
                 var responseObj: [String: Any] = ["success": true]
-                if let val = evalResult {
+                if let val = rawValue {
                     if let strVal = val as? String {
                         if strVal.count > 50_000 {
                             responseObj["result"] = String(strVal.prefix(50_000)) + "\n... [truncated by Nomad: result exceeded 50,000 chars]"
@@ -708,10 +854,100 @@ final class NomadAgentServer: ObservableObject {
                 sendJSON(connection: connection, object: responseObj, origin: origin)
             } catch {
                 let nsErr = error as NSError
-                let isCSP = nsErr.domain == "WKErrorDomain" && (nsErr.localizedDescription.contains("Content Security Policy") || nsErr.localizedDescription.contains("CSP"))
+                var errMsg = nsErr.localizedDescription
+                if let jsMsg = nsErr.userInfo["WKJavaScriptExceptionMessage"] as? String, !jsMsg.isEmpty {
+                    errMsg = jsMsg
+                }
+                let isCSP = nsErr.domain == "WKErrorDomain" && (errMsg.contains("Content Security Policy") || errMsg.contains("CSP") || errMsg.contains("Refused to evaluate"))
                 let errCode = isCSP ? "EVAL_CSP" : "EVAL_ERROR"
-                sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\",\"code\":\"\(errCode)\",\"success\":false}", origin: origin)
+                sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(errMsg)\",\"code\":\"\(errCode)\",\"success\":false}", origin: origin)
             }
+
+        case ("GET", "/console"):
+            let tabIdStr = URLComponents(string: "?" + queryString)?.queryItems?.first(where: { $0.name == "tabId" })?.value
+            guard let activeTab = resolveTab(id: tabIdStr) else {
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"Tab not found\"}", origin: origin)
+                return
+            }
+            let clear = queryString.contains("clear=true")
+            let levelFilter = URLComponents(string: "?" + queryString)?.queryItems?.first(where: { $0.name == "level" })?.value?.lowercased()
+            let filtered = activeTab.consoleEntries.filter { entry in
+                if let lvl = levelFilter, !lvl.isEmpty && lvl != "all" {
+                    return entry.level.rawValue.lowercased() == lvl
+                }
+                return true
+            }
+            let entries = filtered.map { entry in
+                [
+                    "id": entry.id.uuidString,
+                    "level": entry.level.rawValue,
+                    "message": entry.message,
+                    "timestamp": entry.timestamp.timeIntervalSince1970 * 1000.0
+                ] as [String: Any]
+            }
+            if clear {
+                activeTab.consoleEntries.removeAll()
+            }
+            sendJSON(connection: connection, object: [
+                "success": true,
+                "tabId": activeTab.id.uuidString,
+                "count": entries.count,
+                "entries": entries
+            ], origin: origin)
+
+        case ("POST", "/console/clear"), ("DELETE", "/console"):
+            let tabIdStr = URLComponents(string: "?" + queryString)?.queryItems?.first(where: { $0.name == "tabId" })?.value
+            guard let activeTab = resolveTab(id: tabIdStr) else {
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}", origin: origin)
+                return
+            }
+            activeTab.consoleEntries.removeAll()
+            sendJSON(connection: connection, object: ["success": true, "cleared": true], origin: origin)
+
+        case ("GET", "/network"):
+            let tabIdStr = URLComponents(string: "?" + queryString)?.queryItems?.first(where: { $0.name == "tabId" })?.value
+            guard let activeTab = resolveTab(id: tabIdStr) else {
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"Tab not found\"}", origin: origin)
+                return
+            }
+            let clear = queryString.contains("clear=true")
+            let filter = URLComponents(string: "?" + queryString)?.queryItems?.first(where: { $0.name == "statusFilter" })?.value ?? "all"
+            let filtered = activeTab.networkEntries.filter { entry in
+                if filter == "errors" { return entry.isError }
+                if filter == "success" { return !entry.isError }
+                return true
+            }
+            let entries = filtered.map { entry in
+                [
+                    "id": entry.id.uuidString,
+                    "method": entry.method,
+                    "url": entry.url,
+                    "status": entry.status,
+                    "durationMs": entry.durationMs,
+                    "type": entry.type,
+                    "isError": entry.isError,
+                    "error": (entry.error as Any?) ?? NSNull(),
+                    "timestamp": entry.timestamp.timeIntervalSince1970 * 1000.0
+                ] as [String: Any]
+            }
+            if clear {
+                activeTab.networkEntries.removeAll()
+            }
+            sendJSON(connection: connection, object: [
+                "success": true,
+                "tabId": activeTab.id.uuidString,
+                "count": entries.count,
+                "entries": entries
+            ], origin: origin)
+
+        case ("POST", "/network/clear"), ("DELETE", "/network"):
+            let tabIdStr = URLComponents(string: "?" + queryString)?.queryItems?.first(where: { $0.name == "tabId" })?.value
+            guard let activeTab = resolveTab(id: tabIdStr) else {
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No active tab\"}", origin: origin)
+                return
+            }
+            activeTab.networkEntries.removeAll()
+            sendJSON(connection: connection, object: ["success": true, "cleared": true], origin: origin)
 
         default:
             sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"Endpoint not found: \(method) \(path)\"}", origin: origin)

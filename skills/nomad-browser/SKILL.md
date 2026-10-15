@@ -12,7 +12,10 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 > [!IMPORTANT]
 > **Never request raw page HTML (`outerHTML`).**
 > Raw HTML on modern websites consumes between 50,000 and 150,000 tokens per page, rapidly exhausting context windows and introducing hallucination.
-> **Always use `nomad_snapshot`** which yields a dense, curated semantic tree costing only ~250–400 tokens per page.
+> [!IMPORTANT]
+> **Never request raw page HTML (`outerHTML`).**
+> Raw HTML on modern websites consumes between 50,000 and 150,000 tokens per page, rapidly exhausting context windows and introducing hallucination.
+> **Always use `nomad_snapshot`** which yields a curated semantic tree costing ~400–1,800 tokens for 100 elements (~15–20 tokens/element; use `limit: 40-50` for ~400–800 tokens).
 
 ## Available Agent Tools
 
@@ -24,12 +27,15 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 | `nomad_switch_tab` | Switch focused active tab by `id` | ~30 tokens |
 | `nomad_close_tab` | Close tab by `id` | ~30 tokens |
 | `nomad_navigate` | Navigate active tab to URL, or go back, forward, reload (`action: 'back'|'forward'|'reload'|'url'`) | ~50 tokens |
-| `nomad_wait` | Wait for DOM mutation stability, a specific CSS selector, or timeout (essential for SPAs) | ~40 tokens |
+| `nomad_wait` | Wait for DOM stability, CSS selector, network idle (`mode: 'networkidle'`), navigation (`mode: 'navigation'`), or timeout | ~40 tokens |
 | `nomad_cookies` | Inspect, inject, or clear session cookies for authentication and state | ~80 tokens |
-| `nomad_snapshot` | **Primary perception:** Dense semantic markdown of visible interactive elements (including Shadow DOM, occlusion checks, and accessible states) | ~300 tokens |
-| `nomad_action` | Dispatch atomic actions: `click`, `hover`, `type` (React-compatible), `clear`, `press` (key chords), `selectOption`, `scroll`, `drag`, `highlight` | ~40 tokens |
-| `nomad_screenshot` | GPU snapshot; set `labeled: true` for vision-grounded element numbered badges | Base64 image |
-| `nomad_evaluate` | Run arbitrary JavaScript in page context and return result | Minimal |
+| `nomad_snapshot` | **Primary perception:** Dense semantic markdown of interactive & text elements (`li`, `p`, `td`, `th`), deterministic IDs, redaction, pagination, and JSON mode (`mode: 'text' \| 'json'`) | ~400–1,800 tokens |
+| `nomad_action` | Atomic interactions (`click`, `hover`, `type`, `clear`, `press`, `selectOption`, `scroll`, `drag`, `highlight`) with automatic self-healing retry on stale refs | ~40 tokens |
+| `nomad_screenshot` | GPU snapshot; set `labeled: true` for vision badges, or `elementId` / `clip` for cropped region capture | Base64 image |
+| `nomad_evaluate` | Run expression-oriented JavaScript in page context; returns value or detailed runtime exception with stack | Minimal |
+| `nomad_dialog` | Inspect or configure JavaScript dialog handling (`policy: 'accept' \| 'dismiss'`, optional prompt response text) | ~40 tokens |
+| `nomad_console` | Inspect recent page console logs (`log`, `warn`, `error`) or clear log buffer | ~100 tokens |
+| `nomad_network` | Inspect recent HTTP requests (fetch/XHR), status codes, latencies, and errors | ~150 tokens |
 
 ---
 
@@ -44,18 +50,23 @@ nomad_navigate({ "url": "https://example.com" })
 nomad_status({})
 ```
 
-### 2. Dense Semantic Perception (~300 tokens)
-Call `nomad_snapshot`. It returns a distilled markdown tree:
+### 2. Dense Semantic Perception (~400–1,800 tokens)
+Call `nomad_snapshot`. It returns a distilled tree with deterministic `[eN]` refs, text elements (`li`, `p`, `td`) for outcome verification, `(offscreen)` flags, and automatic redaction of sensitive credentials/payment data:
 ```markdown
 === Nomad Semantic Perception ===
-Tokens: ~280
-URL: https://example.com
-Title: Example Domain
+Tokens: ~380
+URL: https://example.com/todos
+Title: Todo App
 
-[e1] <input id="search" placeholder="Search..." type="text">
-[e2] <button id="submit">Search</button>
-[e3] <a href="/docs">Documentation</a>
-[e4] <a href="/login">Sign In</a>
+[e1] <h1 "Tasks">
+[e2] <input id="new-todo" placeholder="What needs to be done?" type="text">
+[e3] <button id="add">Add</button>
+[e4] <li "Buy milk">
+[e5] <a href="/login">Sign In</a> (offscreen)
+```
+For dense pages, tune the budget with `limit` (default 100) or `offset`:
+```json
+nomad_snapshot({ "limit": 40, "offset": 0, "viewportOnly": true, "includeText": true })
 ```
 
 ### 3. Precision Action Dispatch
