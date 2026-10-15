@@ -7,11 +7,97 @@
 
 import SwiftUI
 import Combine
+import AppKit
+import UniformTypeIdentifiers
 
 /// Central store for app preferences, appearance customizations, and bookmarks.
 @MainActor
 final class SettingsStore: ObservableObject {
     static let shared = SettingsStore()
+
+    // MARK: - Auto-detected Local Browsers ("Bring Things Over")
+
+    struct LocalBrowserSource: Identifiable {
+        let id: String
+        let name: String
+        let bookmarksURL: URL
+    }
+
+    /// Automatically scans standard macOS library paths for existing browsers on-device.
+    var detectedBrowserSources: [LocalBrowserSource] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        var sources: [LocalBrowserSource] = []
+
+        let chromePath = home.appendingPathComponent("Library/Application Support/Google/Chrome/Default/Bookmarks")
+        if FileManager.default.fileExists(atPath: chromePath.path) {
+            sources.append(LocalBrowserSource(id: "chrome", name: "Google Chrome", bookmarksURL: chromePath))
+        }
+
+        let arcPath = home.appendingPathComponent("Library/Application Support/Arc/User Data/Default/Bookmarks")
+        if FileManager.default.fileExists(atPath: arcPath.path) {
+            sources.append(LocalBrowserSource(id: "arc", name: "Arc", bookmarksURL: arcPath))
+        }
+
+        let bravePath = home.appendingPathComponent("Library/Application Support/BraveSoftware/Brave-Browser/Default/Bookmarks")
+        if FileManager.default.fileExists(atPath: bravePath.path) {
+            sources.append(LocalBrowserSource(id: "brave", name: "Brave", bookmarksURL: bravePath))
+        }
+
+        let edgePath = home.appendingPathComponent("Library/Application Support/Microsoft Edge/Default/Bookmarks")
+        if FileManager.default.fileExists(atPath: edgePath.path) {
+            sources.append(LocalBrowserSource(id: "edge", name: "Microsoft Edge", bookmarksURL: edgePath))
+        }
+
+        return sources
+    }
+
+    /// Native macOS prompt to bring bookmarks over from installed browsers or files.
+    func promptBringThingsOver() {
+        let sources = detectedBrowserSources
+        let alert = NSAlert()
+        alert.messageText = "Bring Things Over"
+        alert.informativeText = "Import bookmarks directly from your existing browsers into Nomad."
+        alert.alertStyle = .informational
+
+        for src in sources {
+            alert.addButton(withTitle: "Import \(src.name)")
+        }
+        alert.addButton(withTitle: "Choose File...")
+        alert.addButton(withTitle: "Cancel")
+
+        let response = alert.runModal()
+        let buttonIndex = response.rawValue - 1000
+
+        if buttonIndex < sources.count {
+            let selectedSource = sources[buttonIndex]
+            let count = importBookmarks(from: selectedSource.bookmarksURL)
+            showImportResultAlert(count: count, sourceName: selectedSource.name)
+        } else if buttonIndex == sources.count {
+            // Choose File...
+            let panel = NSOpenPanel()
+            panel.title = "Import Bookmarks File"
+            panel.prompt = "Import"
+            panel.allowedContentTypes = [.html, .json, .plainText]
+            panel.allowsMultipleSelection = false
+            panel.canChooseDirectories = false
+
+            if panel.runModal() == .OK, let fileURL = panel.url {
+                let count = importBookmarks(from: fileURL)
+                showImportResultAlert(count: count, sourceName: fileURL.lastPathComponent)
+            }
+        }
+    }
+
+    private func showImportResultAlert(count: Int, sourceName: String) {
+        let alert = NSAlert()
+        alert.messageText = count > 0 ? "Import Complete" : "No New Bookmarks"
+        alert.informativeText = count > 0
+            ? "Successfully imported \(count) bookmark\(count == 1 ? "" : "s") from \(sourceName)."
+            : "No new unique bookmarks were found in \(sourceName)."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Done")
+        alert.runModal()
+    }
 
     // MARK: - Appearance Preferences
     @AppStorage("nomad.theme") var theme: String = "system" {

@@ -10,6 +10,7 @@ import Network
 import AppKit
 import Combine
 import WebKit
+import CryptoKit
 
 /// Embedded lightweight local API server for Nomad using Apple's native Network.framework.
 /// Binds strictly to 127.0.0.1:9222 with zero third-party dependencies, 0% idle CPU, and automatic socket cleanup.
@@ -23,6 +24,28 @@ final class NomadAgentServer: ObservableObject {
             return p
         }
         return 9222
+    }
+
+    /// Constant-time string comparison to prevent timing attacks on bearer token authentication.
+    nonisolated private static func constantTimeEquals(_ a: String, _ b: String) -> Bool {
+        let digestA = SHA256.hash(data: Data(a.utf8))
+        let digestB = SHA256.hash(data: Data(b.utf8))
+        return digestA == digestB
+    }
+
+    /// Validates request Origin header to prevent DNS rebinding and cross-site exfiltration attacks.
+    nonisolated private static func isAllowedOrigin(_ origin: String?) -> Bool {
+        guard let origin = origin, !origin.isEmpty else {
+            // Local CLI, curl, Node.js, Python, or MCP servers emit no Origin header
+            return true
+        }
+        let lower = origin.lowercased()
+        if lower == "null" { return true }
+        if lower.hasPrefix("http://127.0.0.1") || lower.hasPrefix("https://127.0.0.1") { return true }
+        if lower.hasPrefix("http://localhost") || lower.hasPrefix("https://localhost") { return true }
+        if lower.hasPrefix("http://[::1]") || lower.hasPrefix("https://[::1]") { return true }
+        if lower.hasPrefix("chrome-extension://") { return true }
+        return false
     }
 
     @Published private(set) var isRunning: Bool = false
@@ -223,7 +246,14 @@ final class NomadAgentServer: ObservableObject {
             return
         }
 
-        // Handle CORS Preflight
+        // Validate Origin header against DNS rebinding & cross-site exfiltration attacks
+        if !Self.isAllowedOrigin(origin) {
+            print("🛡️ [NomadAgentServer] Blocked cross-origin request from untrusted origin: \(origin ?? "unknown")")
+            sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"Forbidden: cross-origin requests from untrusted web origins are blocked by Nomad security policy.\"}", origin: nil)
+            return
+        }
+
+        // Handle CORS Preflight (only reached if origin is valid)
         if method == "OPTIONS" {
             sendResponse(connection: connection, status: "204 No Content", body: "", origin: origin)
             return
@@ -246,9 +276,9 @@ final class NomadAgentServer: ObservableObject {
         }
 
         // Token Auth check (bypassed if NOMAD_DISABLE_AUTH=1 in environment)
-        let isPublicEndpoint = (method == "GET" && (path == "/" || path == "/status"))
         let authDisabled = ProcessInfo.processInfo.environment["NOMAD_DISABLE_AUTH"] == "1"
-        if !isPublicEndpoint && !authDisabled {
+        var isAuthenticated = authDisabled
+        if !isAuthenticated {
             let authHeader = headers["authorization"] ?? ""
             var providedToken: String? = nil
             if authHeader.lowercased().starts(with: "bearer ") {
@@ -259,7 +289,24 @@ final class NomadAgentServer: ObservableObject {
                 providedToken = qToken
             }
 
-            guard let tok = providedToken, tok == self.token else {
+            if let tok = providedToken, Self.constantTimeEquals(tok, self.token) {
+                isAuthenticated = true
+            }
+        }
+
+        // Unauthenticated access is strictly limited to minimal health check probe without sensitive page data
+        let isPublicHealthCheck = (method == "GET" && (path == "/" || path == "/status"))
+        if !isAuthenticated {
+            if isPublicHealthCheck {
+                let publicStatusObj: [String: Any] = [
+                    "nomad": "active",
+                    "version": "1.0",
+                    "port": self.port,
+                    "authRequired": true
+                ]
+                sendJSON(connection: connection, object: publicStatusObj, origin: origin)
+                return
+            } else {
                 sendResponse(connection: connection, status: "401 Unauthorized", body: "{\"error\":\"Unauthorized: valid Bearer token required in Authorization header or ~/.nomad/agent-token\"}", origin: origin)
                 return
             }
@@ -416,9 +463,16 @@ final class NomadAgentServer: ObservableObject {
                     return
                 }
                 let allowLocal = (json["allowLocalFiles"] as? Bool) ?? false
-                if scheme == "file" && !allowLocal {
-                    sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"file:// URLs are disabled by default. Pass allowLocalFiles: true to navigate local files.\"}", origin: origin)
-                    return
+                if scheme == "file" {
+                    if !allowLocal {
+                        sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"file:// URLs are disabled by default. Pass allowLocalFiles: true to navigate local files.\"}", origin: origin)
+                        return
+                    }
+                    let pathLower = url.path.lowercased()
+                    if pathLower.contains("/.ssh") || pathLower.contains("/.nomad") || pathLower.contains("/library/keychains") || pathLower.contains("/etc/master.passwd") || pathLower.contains("/etc/sudoers") {
+                        sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"Access to sensitive directory or credential file is blocked by Nomad security policy.\"}", origin: origin)
+                        return
+                    }
                 }
                 activeTab.load(url: url)
                 // Brief pause to detect immediate provisional failure (e.g. invalid host / DNS resolution failure)
@@ -956,7 +1010,7 @@ final class NomadAgentServer: ObservableObject {
 
     nonisolated private func sendRaw(connection: NWConnection, status: String = "200 OK", contentType: String, data: Data, origin: String? = nil) {
         var corsHeaders = ""
-        if let origin = origin, !origin.isEmpty {
+        if let origin = origin, !origin.isEmpty, Self.isAllowedOrigin(origin) {
             corsHeaders = """
             Access-Control-Allow-Origin: \(origin)\r
             Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r

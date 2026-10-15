@@ -1,0 +1,25 @@
+# Temporary scratch / assets
+images/
+scratch/
+*.tmp
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+project.xcworkspace/xcuserdata/
+*.xcuserdatad/
+xcuserdata/
+
+# Node
+node_modules/
+.npm/
+
+# Local agent tokens / keys
+.env
+.nomad/

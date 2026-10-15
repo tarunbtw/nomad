@@ -25,6 +25,12 @@ struct nomadApp: App {
                 }
                 .keyboardShortcut("p", modifiers: .command)
             }
+            CommandGroup(after: .newItem) {
+                Button("Bring Things Over...") {
+                    SettingsStore.shared.promptBringThingsOver()
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+            }
         }
     }
 }

@@ -148,7 +148,7 @@ struct SettingsView: View {
 
                 Spacer()
 
-                Button(action: importBookmarksFromFile) {
+                Button(action: { settings.promptBringThingsOver() }) {
                     HStack(spacing: 6) {
                         Image(systemName: "square.and.arrow.down")
                             .font(.system(size: 12, weight: .semibold))
