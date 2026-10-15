@@ -12,27 +12,24 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 > [!IMPORTANT]
 > **Never request raw page HTML (`outerHTML`).**
 > Raw HTML on modern websites consumes between 50,000 and 150,000 tokens per page, rapidly exhausting context windows and introducing hallucination.
-> [!IMPORTANT]
-> **Never request raw page HTML (`outerHTML`).**
-> Raw HTML on modern websites consumes between 50,000 and 150,000 tokens per page, rapidly exhausting context windows and introducing hallucination.
-> **Always use `nomad_snapshot`** which yields a curated semantic tree costing ~400–1,800 tokens for 100 elements (~15–20 tokens/element; use `limit: 40-50` for ~400–800 tokens).
+> **Always use `nomad_snapshot`** which yields a curated semantic tree costing ~400–2,000 tokens for 100 elements (~15–20 tokens/element; recommend `limit: 40-50` for ~600–900 tokens).
 
 ## Available Agent Tools
 
 | Tool | Purpose | Token Cost |
 | :--- | :--- | :--- |
-| `nomad_status` | Check if Nomad is active, get open tab count, active URL and title | ~50 tokens |
+| `nomad_status` | Check engine status, open tabs, active page, and supported capabilities | ~50 tokens |
 | `nomad_tabs` | List all open tabs (id, title, url, active status) | ~100 tokens |
 | `nomad_new_tab` | Open a new tab (optional `url`, `isIncognito`, `select`) | ~50 tokens |
 | `nomad_switch_tab` | Switch focused active tab by `id` | ~30 tokens |
 | `nomad_close_tab` | Close tab by `id` | ~30 tokens |
 | `nomad_navigate` | Navigate active tab to URL, or go back, forward, reload (`action: 'back'|'forward'|'reload'|'url'`) | ~50 tokens |
-| `nomad_wait` | Wait for DOM stability, CSS selector, network idle (`mode: 'networkidle'`), navigation (`mode: 'navigation'`), or timeout | ~40 tokens |
+| `nomad_wait` | Wait for DOM stability (`mode: 'stability'`), CSS selector, URL (`mode: 'url'`), network idle (`mode: 'networkidle'`), navigation, or timeout | ~40 tokens |
 | `nomad_cookies` | Inspect, inject, or clear session cookies for authentication and state | ~80 tokens |
-| `nomad_snapshot` | **Primary perception:** Dense semantic markdown of interactive & text elements (`li`, `p`, `td`, `th`), deterministic IDs, redaction, pagination, and JSON mode (`mode: 'text' \| 'json'`) | ~400–1,800 tokens |
+| `nomad_snapshot` | **Primary perception:** Dense semantic markdown of interactive & text elements (`li`, `p`, `td`, `th`), deterministic IDs, redaction, pagination, and JSON mode (`mode: 'text' \| 'json'`) | ~400–2,000 tokens |
 | `nomad_action` | Atomic interactions (`click`, `hover`, `type`, `clear`, `press`, `selectOption`, `scroll`, `drag`, `highlight`) with automatic self-healing retry on stale refs | ~40 tokens |
 | `nomad_screenshot` | GPU snapshot; set `labeled: true` for vision badges, or `elementId` / `clip` for cropped region capture | Base64 image |
-| `nomad_evaluate` | Run expression-oriented JavaScript in page context; returns value or detailed runtime exception with stack | Minimal |
+| `nomad_evaluate` | Run expression-oriented JavaScript in page context; returns value or descriptive runtime error message | Minimal |
 | `nomad_dialog` | Inspect or configure JavaScript dialog handling (`policy: 'accept' \| 'dismiss'`, optional prompt response text) | ~40 tokens |
 | `nomad_console` | Inspect recent page console logs (`log`, `warn`, `error`) or clear log buffer | ~100 tokens |
 | `nomad_network` | Inspect recent HTTP requests (fetch/XHR), status codes, latencies, and errors | ~150 tokens |
@@ -50,7 +47,7 @@ nomad_navigate({ "url": "https://example.com" })
 nomad_status({})
 ```
 
-### 2. Dense Semantic Perception (~400–1,800 tokens)
+### 2. Dense Semantic Perception (~400–2,000 tokens)
 Call `nomad_snapshot`. It returns a distilled tree with deterministic `[eN]` refs, text elements (`li`, `p`, `td`) for outcome verification, `(offscreen)` flags, and automatic redaction of sensitive credentials/payment data:
 ```markdown
 === Nomad Semantic Perception ===
@@ -68,6 +65,9 @@ For dense pages, tune the budget with `limit` (default 100) or `offset`:
 ```json
 nomad_snapshot({ "limit": 40, "offset": 0, "viewportOnly": true, "includeText": true })
 ```
+
+> [!NOTE]
+> **URL Display in Header:** Snapshot headers echo the current page URL for context grounding. `data:` URLs are collapsed to `data:<mime>;length=N` and long URLs are truncated to prevent context pollution.
 
 ### 3. Precision Action Dispatch
 Interact with elements directly by reference:
@@ -87,15 +87,19 @@ nomad_action({
 ```
 
 Supported action types:
-- `click`: Triggers synthetic PointerDown, PointerUp, and Click events at the element's bounding center.
+- `click`: Triggers synthetic PointerDown, PointerUp, and Click events at the element's center. Occlusion-aware: if an overlay or modal backdrop covers the element, the click hits the topmost covering element unless `force: true` is passed.
 - `hover`: Dispatches pointerover/pointerenter/mousemove sequence to open dropdown menus or tooltips.
-- `type`: Clears/focuses element and sets value via prototype setter (React 16+ and contentEditable compatible) with native input/change dispatch.
+- `type`: Clears/focuses element and sets value via prototype setter (React 16+ and contentEditable compatible). Dispatches `input` events per keystroke. To commit changes, pass `submit: true` (presses Enter), `blur: true`, or `change: true`.
 - `clear`: Wipes input/textarea/contentEditable value and triggers change events.
-- `press`: Simulates key press or modifier chord (e.g. `text: "Enter"`, `text: "Meta+A"`, `text: "Shift+Tab"`).
-- `selectOption`: Chooses dropdown `<option>` by `optionValue` or `optionText`.
+- `press`: Simulates key press or modifier chord (e.g. `key: "Enter"`, `key: "Meta+A"`, `key: "Escape"`). Validates key names against standard named keys (`Enter`, `Tab`, `Escape`, `Backspace`, `Delete`, `ArrowUp/Down/Left/Right`, `Space`, function keys `F1`–`F12`, and modifier chords); rejects unknown key names.
+- `selectOption`: Chooses native HTML `<select>` dropdown option by `optionValue` or `optionText`. For custom ARIA/div dropdowns (e.g. Radix, HeadlessUI, React-Select), click the dropdown trigger element, wait/snapshot, and click the option element.
 - `scroll`: Scrolls the viewport by `scrollDeltaY` pixels (e.g. `300` to scroll down, `-300` to scroll up) or `scrollDeltaX`.
 - `drag`: Dispatches standard HTML5 drag-and-drop sequence (`dragstart`, `dragover`, `drop`, `dragend`) to destination (`toX`, `toY`).
 - `highlight`: Briefly flashes an orange highlight box over the element for visual confirmation.
+
+> [!NOTE]
+> **JavaScript Evaluation (`nomad_evaluate`):**
+> Evaluates expression-oriented JavaScript in page context. To run multi-statement scripts or declare variables, wrap the code in an IIFE: `(() => { const x = 1; return x + 1; })()`.
 
 ### 4. Vision Grounding (Multimodal Verification)
 When visual spatial layout is required, capture a vision-grounded screenshot:
@@ -107,6 +111,12 @@ This renders numbered visual badges matching the snapshot references (`[1]`, `[2
 > [!TIP]
 > **Animated SPAs & Entrance Transitions (Framer, WebGL, Canvas):**
 > Modern landing pages (such as Framer or WebGL showcases) frequently utilize initial entrance fade-in animations (`opacity: 0 -> 1` over 500–1000ms). When observing such pages, call `nomad_wait({ mode: "timeout", durationMs: 1200 })` or wait for stability before capturing the reference screenshot, and visually inspect the frame before proceeding.
+>
+> **Choosing the Right Wait Mode:**
+> - `mode: "stability"`: Waits for ongoing DOM mutation bursts to quiet down (great after clicks, modal opens, or accordion transitions). It settles once active churn stops; it does not wait for delayed future timers.
+> - `mode: "selector"`: Best for async UI renders or API fetches — returns immediately once the target node mounts in the DOM. Automatically pierces open Shadow DOM roots and nested same-origin frames.
+> - `mode: "networkidle"`: Best for data-heavy SPAs that perform background fetch/XHR queries before rendering content. Waits until in-flight requests settle for 500ms (for pages with recurring polling intervals like `setInterval(fetch, 200ms)`, use `stability` or `selector` instead).
+> - `mode: "navigation"` or `mode: "url"`: Best when awaiting full-page redirects or SPA history transitions.
 
 ---
 

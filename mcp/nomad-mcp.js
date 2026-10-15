@@ -97,17 +97,36 @@ function callNomad(method, pathStr, body = null) {
 
 function formatToolResponse(res, customText = null) {
     const isErr = Boolean(res && typeof res === 'object' && (res.error || res.success === false || (res.code && String(res.code).startsWith('EVAL_'))));
-    const text = customText !== null ? customText : (typeof res === 'string' ? res : JSON.stringify(res, null, 2));
+    let text;
+    if (isErr) {
+        const errVal = res && (res.error || res.message);
+        text = typeof res === 'string' ? res : (errVal ? (typeof errVal === 'string' ? errVal : JSON.stringify(errVal)) : JSON.stringify(res, null, 2));
+    } else {
+        text = customText !== null ? customText : (typeof res === 'string' ? res : JSON.stringify(res, null, 2));
+    }
     return {
         content: [{ type: 'text', text }],
         isError: isErr
     };
 }
 
+function sanitizeUrlForDisplay(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return '';
+    if (rawUrl.startsWith('data:')) {
+        const comma = rawUrl.indexOf(',');
+        const mime = comma > 0 ? rawUrl.substring(0, comma) : 'data:text/html';
+        return `${mime};length=${rawUrl.length}`;
+    }
+    if (rawUrl.length > 200) {
+        return rawUrl.substring(0, 197) + '...';
+    }
+    return rawUrl;
+}
+
 const TOOLS = [
     {
         name: 'nomad_status',
-        description: 'Check if Nomad browser engine is active, get version, tab counts, and current active page info.',
+        description: 'Check if Nomad browser engine is active, get version, tab counts, active page info, and engine capabilities.',
         inputSchema: {
             type: 'object',
             properties: {},
@@ -235,6 +254,10 @@ const TOOLS = [
                 scrollDeltaX: { type: 'number', description: 'Pixels to scroll right (positive) or left (negative) for "scroll"' },
                 direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Scroll direction fallback' },
                 amount: { type: 'number', description: 'Pixels to scroll for direction fallback' },
+                force: { type: 'boolean', description: 'When true, bypass occlusion check and click target directly even if covered by an overlay' },
+                submit: { type: 'boolean', description: 'When true, submit form or press Enter after typing' },
+                blur: { type: 'boolean', description: 'When true, blur element after typing to trigger commit' },
+                key: { type: 'string', description: 'Key name or chord to press (e.g. "Enter", "Tab", "Escape", "Meta+A")' },
                 tabId: { type: 'string', description: 'Optional target tab UUID' }
             },
             required: ['type'],
@@ -243,7 +266,7 @@ const TOOLS = [
     },
     {
         name: 'nomad_wait',
-        description: 'Wait for DOM mutation stability, a specific CSS selector to appear, network requests to become idle, navigation to complete, or a timeout before continuing execution.',
+        description: 'Wait for DOM mutation stability, a specific CSS selector, URL pattern, network requests to become idle, navigation to complete, or a timeout before continuing execution.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -443,7 +466,8 @@ async function handleToolCall(name, args) {
             }
             const summary = res.summary || '';
             const tokens = res.tokenEstimate || 0;
-            const text = `=== Nomad Semantic Perception ===\nTokens: ~${tokens}\nURL: ${res.url || ''}\nTitle: ${res.title || ''}\n\n${summary}`;
+            const displayUrl = sanitizeUrlForDisplay(res.url);
+            const text = `=== Nomad Semantic Perception ===\nTokens: ~${tokens}\nURL: ${displayUrl}\nTitle: ${res.title || ''}\n\n${summary}`;
             return formatToolResponse(res, text);
         }
         case 'nomad_action': {

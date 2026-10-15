@@ -264,6 +264,16 @@ final class NomadAgentServer: ObservableObject {
 
         switch (method, path) {
         case ("GET", "/"), ("GET", "/status"):
+            let capabilities: [String: Any] = [
+                "waitModes": ["stability", "selector", "timeout", "networkidle", "navigation", "url"],
+                "actions": ["click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight"],
+                "screenshot": ["full", "labeled", "clip", "elementId"],
+                "evaluateWorlds": ["page", "isolated"],
+                "snapshotModes": ["text", "json"],
+                "cookies": ["get", "set", "clear"],
+                "console": ["log", "warn", "error"],
+                "network": ["fetch", "xhr", "status", "timing"]
+            ]
             let statusObj: [String: Any] = [
                 "nomad": "active",
                 "version": "1.0",
@@ -272,7 +282,8 @@ final class NomadAgentServer: ObservableObject {
                 "activeTabId": store.activeTabId?.uuidString ?? "",
                 "activeURL": store.activeTab?.url?.absoluteString ?? "",
                 "activeTitle": store.activeTab?.title ?? "",
-                "lastDialog": (store.activeTab?.lastDialog as Any?) ?? NSNull()
+                "lastDialog": (store.activeTab?.lastDialog as Any?) ?? NSNull(),
+                "capabilities": capabilities
             ]
             sendJSON(connection: connection, object: statusObj, origin: origin)
 
@@ -469,25 +480,52 @@ final class NomadAgentServer: ObservableObject {
                     sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing selector string\"}", origin: origin)
                     return
                 }
+                await activeTab.ensureNomadScriptInjected()
                 let script = """
                 return await new Promise(function(resolve) {
                     var sel = selector;
-                    if (document.querySelector(sel)) {
+                    function checkNode() {
+                        if (window.__nomad && window.__nomad.findInTree) {
+                            var f = window.__nomad.findInTree(document, sel);
+                            if (f) return f;
+                        }
+                        try {
+                            return document.querySelector(sel);
+                        } catch(e) {
+                            return null;
+                        }
+                    }
+                    if (checkNode()) {
                         resolve({ success: true, message: 'Element already present' });
                         return;
                     }
-                    var timer = setTimeout(function() {
-                        obs.disconnect();
+                    var timer = null;
+                    var pollTimer = null;
+                    var obs = null;
+                    function cleanup() {
+                        if (timer) clearTimeout(timer);
+                        if (pollTimer) clearInterval(pollTimer);
+                        if (obs) obs.disconnect();
+                    }
+                    timer = setTimeout(function() {
+                        cleanup();
                         resolve({ success: false, message: 'Timeout waiting for ' + sel });
                     }, timeoutMs);
-                    var obs = new MutationObserver(function() {
-                        if (document.querySelector(sel)) {
-                            clearTimeout(timer);
-                            obs.disconnect();
+                    obs = new MutationObserver(function() {
+                        if (checkNode()) {
+                            cleanup();
                             resolve({ success: true, message: 'Element appeared' });
                         }
                     });
-                    obs.observe(document.documentElement || document.body, { childList: true, subtree: true, attributes: true });
+                    try {
+                        obs.observe(document.documentElement || document.body, { childList: true, subtree: true, attributes: true });
+                    } catch(e) {}
+                    pollTimer = setInterval(function() {
+                        if (checkNode()) {
+                            cleanup();
+                            resolve({ success: true, message: 'Element appeared' });
+                        }
+                    }, 50);
                 });
                 """
                 do {
@@ -731,7 +769,7 @@ final class NomadAgentServer: ObservableObject {
                     sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"Failed to encode PNG data\"}", origin: origin)
                 }
             } catch {
-                sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}", origin: origin)
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(error.localizedDescription)\",\"success\":false}", origin: origin)
             }
 
         case ("POST", "/action"):

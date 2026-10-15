@@ -64,6 +64,9 @@ struct NomadAction: Codable {
     var direction: String? // "up", "down", "left", "right"
     var amount: CGFloat?
     var submit: Bool?
+    var blur: Bool?
+    var change: Bool?
+    var force: Bool?
     var x: CGFloat?
     var y: CGFloat?
     var toX: CGFloat?
@@ -82,6 +85,9 @@ struct NomadAction: Codable {
         direction: String? = nil,
         amount: CGFloat? = nil,
         submit: Bool? = nil,
+        blur: Bool? = nil,
+        change: Bool? = nil,
+        force: Bool? = nil,
         x: CGFloat? = nil,
         y: CGFloat? = nil,
         toX: CGFloat? = nil,
@@ -99,6 +105,9 @@ struct NomadAction: Codable {
         self.direction = direction
         self.amount = amount
         self.submit = submit
+        self.blur = blur
+        self.change = change
+        self.force = force
         self.x = x
         self.y = y
         self.toX = toX
@@ -113,7 +122,7 @@ struct NomadAction: Codable {
     enum CodingKeys: String, CodingKey {
         case action, type
         case target, elementId, selector
-        case text, key, direction, amount, submit
+        case text, key, direction, amount, submit, blur, change, force
         case x, y, toX, toY
         case scrollDeltaY, deltaY, scrollDeltaX, deltaX
         case optionValue, optionText, modifiers
@@ -130,6 +139,9 @@ struct NomadAction: Codable {
         self.text = try container.decodeIfPresent(String.self, forKey: .text)
         self.key = try container.decodeIfPresent(String.self, forKey: .key)
         self.submit = try container.decodeIfPresent(Bool.self, forKey: .submit)
+        self.blur = try container.decodeIfPresent(Bool.self, forKey: .blur)
+        self.change = try container.decodeIfPresent(Bool.self, forKey: .change)
+        self.force = try container.decodeIfPresent(Bool.self, forKey: .force)
         self.x = try container.decodeIfPresent(CGFloat.self, forKey: .x)
         self.y = try container.decodeIfPresent(CGFloat.self, forKey: .y)
         self.toX = try container.decodeIfPresent(CGFloat.self, forKey: .toX)
@@ -167,6 +179,9 @@ struct NomadAction: Codable {
         try container.encodeIfPresent(direction, forKey: .direction)
         try container.encodeIfPresent(amount, forKey: .amount)
         try container.encodeIfPresent(submit, forKey: .submit)
+        try container.encodeIfPresent(blur, forKey: .blur)
+        try container.encodeIfPresent(change, forKey: .change)
+        try container.encodeIfPresent(force, forKey: .force)
         try container.encodeIfPresent(x, forKey: .x)
         try container.encodeIfPresent(y, forKey: .y)
         try container.encodeIfPresent(toX, forKey: .toX)
@@ -184,6 +199,8 @@ struct NomadActionResult: Codable {
     let success: Bool
     let message: String
     let elementId: String?
+    let obscured: Bool?
+    let interceptedBy: String?
 }
 
 // MARK: - In-Page Perception & Action Engine (JavaScript Core)
@@ -199,7 +216,75 @@ enum NomadDOMScript {
         window.__nomad = {
             elements: {},
 
-            // 1. Scans visible interactive targets across Light and Shadow DOM
+            // Viewport-relative bounding rect accounting for parent frame offsets
+            getElementViewportRect: function(element) {
+                if (!element) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+                var r = element.getBoundingClientRect();
+                var curWin = (element.ownerDocument && element.ownerDocument.defaultView) ? element.ownerDocument.defaultView : window;
+                var x = r.left;
+                var y = r.top;
+                try {
+                    while (curWin && curWin !== window && curWin.frameElement) {
+                        var fr = curWin.frameElement.getBoundingClientRect();
+                        x += fr.left;
+                        y += fr.top;
+                        curWin = curWin.parent;
+                    }
+                } catch(e) {}
+                return {
+                    left: x,
+                    top: y,
+                    right: x + r.width,
+                    bottom: y + r.height,
+                    width: r.width,
+                    height: r.height
+                };
+            },
+
+            // Checks whether an element is connected to the live DOM tree, even inside nested frames
+            isNodeConnected: function(node) {
+                if (!node) return false;
+                if (typeof node.isConnected === 'boolean') {
+                    if (!node.isConnected) return false;
+                    var doc = node.ownerDocument;
+                    if (doc && doc !== document && doc.defaultView && doc.defaultView.frameElement) {
+                        return this.isNodeConnected(doc.defaultView.frameElement);
+                    }
+                    return true;
+                }
+                var root = node.getRootNode ? node.getRootNode() : null;
+                return root === document;
+            },
+
+            // Searches for an element by ID/selector across document, open Shadow DOM, and nested iframes
+            findInTree: function(root, sel) {
+                if (!root) return null;
+                try {
+                    var found = root.querySelector('[data-nomad-id="' + sel + '"]') || root.querySelector(sel);
+                    if (found) return found;
+                } catch(e) {}
+                try {
+                    var all = root.querySelectorAll('*');
+                    for (var i = 0; i < all.length; i++) {
+                        var n = all[i];
+                        if (n.shadowRoot) {
+                            var sFound = this.findInTree(n.shadowRoot, sel);
+                            if (sFound) return sFound;
+                        } else if (n.tagName === 'IFRAME') {
+                            try {
+                                var fDoc = n.contentDocument || (n.contentWindow ? n.contentWindow.document : null);
+                                if (fDoc) {
+                                    var iFound = this.findInTree(fDoc, sel);
+                                    if (iFound) return iFound;
+                                }
+                            } catch(err) {}
+                        }
+                    }
+                } catch(e) {}
+                return null;
+            },
+
+            // 1. Scans visible interactive targets across Light and Shadow DOM and iframes
             getSemanticTree: function(options) {
                 options = options || {};
                 var limit = options.limit !== undefined ? Number(options.limit) : 100;
@@ -207,10 +292,16 @@ enum NomadDOMScript {
                 var viewportOnly = Boolean(options.viewportOnly);
                 var includeText = options.includeText !== undefined ? Boolean(options.includeText) : true;
 
-                this.elements = {};
+                if (!this.elements) this.elements = {};
+                for (var oldId in this.elements) {
+                    if (!this.isNodeConnected(this.elements[oldId])) {
+                        delete this.elements[oldId];
+                    }
+                }
                 var results = [];
                 var counter = 1;
 
+                if (document.body) { void document.body.offsetHeight; }
                 var vpW = window.innerWidth;
                 var vpH = window.innerHeight;
 
@@ -326,15 +417,36 @@ enum NomadDOMScript {
                 var allInteractive = [];
                 collectNodes(document, allInteractive);
 
+                // Pre-scan existing elements to preserve identity across DOM mutations
+                var assignedIds = {};
+                var maxIdNum = 0;
+                for (var oldK in this.elements) {
+                    var nOld = parseInt(oldK.substring(1), 10);
+                    if (!isNaN(nOld) && nOld > maxIdNum) maxIdNum = nOld;
+                    assignedIds[oldK] = this.elements[oldK];
+                }
+                for (var k = 0; k < allInteractive.length; k++) {
+                    var exId = allInteractive[k].getAttribute('data-nomad-id');
+                    if (exId && exId.indexOf('e') === 0) {
+                        var n = parseInt(exId.substring(1), 10);
+                        if (!isNaN(n) && n > 0 && !assignedIds[exId]) {
+                            assignedIds[exId] = allInteractive[k];
+                            if (n > maxIdNum) maxIdNum = n;
+                        }
+                    }
+                }
+                var nextCounter = maxIdNum + 1;
+
                 for (var i = 0; i < allInteractive.length; i++) {
                     var el = allInteractive[i];
-                    var rect = el.getBoundingClientRect();
+                    var rect = this.getElementViewportRect(el);
                     var isInputToggle = (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio'));
 
                     // Geometry check: elements with zero size are non-rendered
                     if (!isInputToggle && (rect.width <= 0 || rect.height <= 0)) continue;
 
-                    var style = window.getComputedStyle(el);
+                    var elWin = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+                    var style = elWin.getComputedStyle(el);
                     if (style.display === 'none' || style.visibility === 'hidden') continue;
                     if (parseFloat(style.opacity) < 0.05 && !isInputToggle) continue;
                     if (style.pointerEvents === 'none' && !isInputToggle) continue;
@@ -346,10 +458,13 @@ enum NomadDOMScript {
 
                     var isSensitive = isSensitiveField(el);
                     var val = null;
-                    if (isSensitive) {
-                        if (el.value) val = '[REDACTED]';
-                    } else if (el.value !== undefined && el.value !== '') {
-                        val = String(el.value).substring(0, 50);
+                    var hasFormValue = (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'option' || (tag === 'button' && el.type === 'submit'));
+                    if (hasFormValue) {
+                        if (isSensitive) {
+                            if (el.value) val = '[REDACTED]';
+                        } else if (el.value !== undefined && el.value !== '') {
+                            val = String(el.value).substring(0, 50);
+                        }
                     }
 
                     var isHeading = (tag === 'h1' || tag === 'h2' || tag === 'h3' || el.getAttribute('role') === 'heading');
@@ -382,10 +497,14 @@ enum NomadDOMScript {
                         text = alt.substring(0, 80);
                     }
 
-                    // Assign persistent, deterministic id in document order
-                    var id = 'e' + counter++;
+                    // Assign persistent, identity-stable id
+                    var id = el.getAttribute('data-nomad-id');
+                    if (!id || assignedIds[id] !== el) {
+                        id = 'e' + (nextCounter++);
+                        assignedIds[id] = el;
+                        try { el.setAttribute('data-nomad-id', id); } catch(e) {}
+                    }
                     this.elements[id] = el;
-                    try { el.setAttribute('data-nomad-id', id); } catch(e) {}
 
                     // In-viewport check (top/bottom/left/right relative to viewport)
                     var inViewport = (rect.bottom >= 0 && rect.top <= vpH && rect.right >= 0 && rect.left <= vpW);
@@ -397,7 +516,16 @@ enum NomadDOMScript {
                     if (cx >= 0 && cx <= vpW && cy >= 0 && cy <= vpH && !isInputToggle) {
                         try {
                             var topEl = document.elementFromPoint(cx, cy);
-                            if (topEl && topEl !== el && !el.contains(topEl) && !topEl.contains(el)) {
+                            var curFrame = (el.ownerDocument && el.ownerDocument.defaultView) ? el.ownerDocument.defaultView.frameElement : null;
+                            if (curFrame && topEl === curFrame) {
+                                var localRect = el.getBoundingClientRect();
+                                var lcx = Math.round(localRect.left + localRect.width / 2);
+                                var lcy = Math.round(localRect.top + localRect.height / 2);
+                                var innerTop = el.ownerDocument.elementFromPoint(lcx, lcy);
+                                if (innerTop && innerTop !== el && !el.contains(innerTop) && !innerTop.contains(el)) {
+                                    isObscured = true;
+                                }
+                            } else if (topEl && topEl !== el && !el.contains(topEl) && !topEl.contains(el)) {
                                 var rootNode = el.getRootNode ? el.getRootNode() : null;
                                 var host = (rootNode && rootNode.host) ? rootNode.host : null;
                                 if (topEl !== host && (!host || !host.contains(topEl))) {
@@ -415,7 +543,7 @@ enum NomadDOMScript {
                     var selected = Boolean(el.selected || el.getAttribute('aria-selected') === 'true');
                     var focused = Boolean(document.activeElement === el);
                     var readOnly = Boolean(el.readOnly || el.getAttribute('aria-readonly') === 'true');
-                    var inShadow = Boolean(el.getRootNode && el.getRootNode() instanceof ShadowRoot);
+                    var inShadow = Boolean(el.getRootNode && el.getRootNode().host);
                     var href = (tag === 'a' || tag === 'area') ? (el.getAttribute('href') || el.href || null) : null;
 
                     results.push({
@@ -456,9 +584,19 @@ enum NomadDOMScript {
                 var totalCount = summaryCandidates.length;
                 var pagedItems = summaryCandidates.slice(offset, offset + limit);
 
+                var pageUrl = window.location.href || '';
+                var displayUrl = pageUrl;
+                if (displayUrl.indexOf('data:') === 0) {
+                    var comma = displayUrl.indexOf(',');
+                    var mime = comma > 0 ? displayUrl.substring(0, comma) : 'data:text/html';
+                    displayUrl = mime + ';length=' + pageUrl.length;
+                } else if (displayUrl.length > 200) {
+                    displayUrl = displayUrl.substring(0, 197) + '...';
+                }
+
                 // Build compact markdown semantic summary for LLM prompt ingestion
                 var summaryLines = [
-                    '[Page: ' + (document.title || 'Untitled') + ' | URL: ' + window.location.href + ']',
+                    '[Page: ' + (document.title || 'Untitled') + ' | URL: ' + displayUrl + ']',
                     'Interactive Elements (' + pagedItems.length + ' of ' + totalCount + (totalCount > limit ? ' | pass limit/offset for more' : '') + '):'
                 ];
 
@@ -506,7 +644,7 @@ enum NomadDOMScript {
 
                 return {
                     title: document.title || '',
-                    url: window.location.href,
+                    url: displayUrl,
                     viewportWidth: vpW,
                     viewportHeight: vpH,
                     totalElements: results.length,
@@ -523,36 +661,15 @@ enum NomadDOMScript {
                 var el = null;
 
                 if (targetId) {
-                    if (this.elements && this.elements[targetId] && document.contains(this.elements[targetId])) {
+                    if (this.elements && this.elements[targetId] && this.isNodeConnected(this.elements[targetId])) {
                         el = this.elements[targetId];
                     } else {
-                        try {
-                            el = document.querySelector('[data-nomad-id="' + targetId + '"]') || document.querySelector(targetId);
-                            if (el && this.elements) this.elements[targetId] = el;
-                        } catch(e) {}
-
-                        if (!el && document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
-                            el = document.activeElement;
-                        }
-
-                        if (!el) {
-                            function scanShadow(root) {
-                                if (!root) return null;
-                                var all = root.querySelectorAll('*');
-                                for (var s = 0; s < all.length; s++) {
-                                    if (all[s].shadowRoot) {
-                                        try {
-                                            var found = all[s].shadowRoot.querySelector(targetId) || all[s].shadowRoot.querySelector('[data-nomad-id="' + targetId + '"]');
-                                            if (found) return found;
-                                        } catch(e) {}
-                                        var deeper = scanShadow(all[s].shadowRoot);
-                                        if (deeper) return deeper;
-                                    }
-                                }
-                                return null;
-                            }
-                            try { el = scanShadow(document); } catch(e) {}
-                        }
+                        el = this.findInTree(document, targetId);
+                        if (el && this.elements) this.elements[targetId] = el;
+                    }
+                } else if (action === 'type' || action === 'clear') {
+                    if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.isContentEditable)) {
+                        el = document.activeElement;
                     }
                 }
 
@@ -563,31 +680,70 @@ enum NomadDOMScript {
                 switch (action) {
                     case 'click':
                         if (el) {
+                            if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
+                                try { el.ownerDocument.defaultView.frameElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
+                            }
                             el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-                            el.focus();
+                            try { el.focus(); } catch(e) {}
 
                             // If el is a label, delegate directly to its associated form control
                             if (el.tagName === 'LABEL') {
-                                var targetInput = el.htmlFor ? document.getElementById(el.htmlFor) : el.querySelector('input, select, textarea');
+                                var targetInput = el.htmlFor ? (el.ownerDocument ? el.ownerDocument.getElementById(el.htmlFor) : document.getElementById(el.htmlFor)) : el.querySelector('input, select, textarea');
                                 if (targetInput) el = targetInput;
                             }
 
-                            // Pointer and mouse event simulation sequence
-                            var pdown = new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window });
-                            var mdown = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window });
-                            var pup = new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window });
-                            var mup = new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window });
+                            var elDoc = el.ownerDocument || document;
+                            var elWin = elDoc.defaultView || window;
 
-                            el.dispatchEvent(pdown);
-                            el.dispatchEvent(mdown);
-                            el.dispatchEvent(pup);
-                            el.dispatchEvent(mup);
+                            var targetToClick = el;
+                            var wasObscured = false;
+                            var interceptorTag = null;
+
+                            // Occlusion hit-testing: unless force: true, clicks hit what is physically on top
+                            if (!actionObj.force) {
+                                try {
+                                    var rectC = el.getBoundingClientRect();
+                                    var cxC = Math.round(rectC.left + rectC.width / 2);
+                                    var cyC = Math.round(rectC.top + rectC.height / 2);
+                                    var topEl = elDoc.elementFromPoint(cxC, cyC);
+                                    if (topEl && topEl !== el && !el.contains(topEl)) {
+                                        var rootNode = el.getRootNode ? el.getRootNode() : null;
+                                        var host = (rootNode && rootNode.host) ? rootNode.host : null;
+                                        if (topEl !== host && (!host || !host.contains(topEl))) {
+                                            wasObscured = true;
+                                            interceptorTag = topEl.tagName ? topEl.tagName.toLowerCase() : 'overlay';
+                                            targetToClick = topEl;
+                                        }
+                                    }
+                                } catch(e) {}
+                            }
+
+                            // Pointer and mouse event simulation sequence
+                            var pdown = new elWin.PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: elWin });
+                            var mdown = new elWin.MouseEvent('mousedown', { bubbles: true, cancelable: true, view: elWin });
+                            var pup = new elWin.PointerEvent('pointerup', { bubbles: true, cancelable: true, view: elWin });
+                            var mup = new elWin.MouseEvent('mouseup', { bubbles: true, cancelable: true, view: elWin });
+
+                            targetToClick.dispatchEvent(pdown);
+                            targetToClick.dispatchEvent(mdown);
+                            targetToClick.dispatchEvent(pup);
+                            targetToClick.dispatchEvent(mup);
 
                             // Native click triggers standard activation behavior (checkboxes, buttons, navigation)
                             try {
-                                el.click();
+                                targetToClick.click();
                             } catch(e) {
-                                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                                targetToClick.dispatchEvent(new elWin.MouseEvent('click', { bubbles: true, cancelable: true, view: elWin }));
+                            }
+
+                            if (wasObscured) {
+                                return {
+                                    success: true,
+                                    message: 'Clicked point of ' + (targetId || 'element') + ' (intercepted by <' + interceptorTag + '>)',
+                                    elementId: targetId,
+                                    obscured: true,
+                                    interceptedBy: interceptorTag
+                                };
                             }
 
                             return { success: true, message: 'Clicked ' + (targetId || 'element'), elementId: targetId };
@@ -603,54 +759,79 @@ enum NomadDOMScript {
 
                     case 'hover':
                         if (!el) return { success: false, message: 'No target element for hover action' };
+                        if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
+                            try { el.ownerDocument.defaultView.frameElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
+                        }
                         el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-                        el.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, cancelable: true, view: window }));
-                        el.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false, cancelable: false, view: window }));
-                        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }));
-                        el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window }));
+                        var elDocH = el.ownerDocument || document;
+                        var elWinH = elDocH.defaultView || window;
+                        el.dispatchEvent(new elWinH.PointerEvent('pointerover', { bubbles: true, cancelable: true, view: elWinH }));
+                        el.dispatchEvent(new elWinH.PointerEvent('pointerenter', { bubbles: false, cancelable: false, view: elWinH }));
+                        el.dispatchEvent(new elWinH.MouseEvent('mouseover', { bubbles: true, cancelable: true, view: elWinH }));
+                        el.dispatchEvent(new elWinH.MouseEvent('mousemove', { bubbles: true, cancelable: true, view: elWinH }));
                         return { success: true, message: 'Hovered over ' + targetId, elementId: targetId };
 
                     case 'clear':
                         if (!el) return { success: false, message: 'No target element for clear action' };
+                        var clearTag = el.tagName ? el.tagName.toUpperCase() : '';
+                        var isInputClear = (clearTag === 'INPUT' || clearTag === 'TEXTAREA');
+                        if (!isInputClear && !el.isContentEditable) {
+                            return { success: false, message: 'Target element <' + el.tagName.toLowerCase() + '> is not an input or editable element' };
+                        }
+                        if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
+                            try { el.ownerDocument.defaultView.frameElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
+                        }
                         el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-                        el.focus();
+                        try { el.focus(); } catch(e) {}
+                        var elDocC = el.ownerDocument || document;
+                        var elWinC = elDocC.defaultView || window;
                         if (el.isContentEditable) {
                             try {
-                                document.execCommand('selectAll', false, null);
-                                document.execCommand('delete', false, null);
+                                elDocC.execCommand('selectAll', false, null);
+                                elDocC.execCommand('delete', false, null);
                             } catch(e) {
                                 el.innerText = '';
                             }
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new elWinC.Event('input', { bubbles: true }));
                             return { success: true, message: 'Cleared value in ' + targetId, elementId: targetId };
                         }
                         try {
-                            var proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-                            var setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-                            if (setter) { setter.call(el, ''); } else { el.value = ''; }
+                            var protoC = (clearTag === 'TEXTAREA') ? ((elWinC.HTMLTextAreaElement && elWinC.HTMLTextAreaElement.prototype) || window.HTMLTextAreaElement.prototype) : ((elWinC.HTMLInputElement && elWinC.HTMLInputElement.prototype) || window.HTMLInputElement.prototype);
+                            var setterC = Object.getOwnPropertyDescriptor(protoC, 'value')?.set;
+                            if (setterC) { setterC.call(el, ''); } else { el.value = ''; }
                         } catch(e) {
                             el.value = '';
                         }
-                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        el.dispatchEvent(new elWinC.Event('input', { bubbles: true }));
+                        el.dispatchEvent(new elWinC.Event('change', { bubbles: true }));
                         return { success: true, message: 'Cleared value in ' + targetId, elementId: targetId };
 
                     case 'type':
                         if (!el) return { success: false, message: 'No target element for type action' };
+                        var typeTag = el.tagName ? el.tagName.toUpperCase() : '';
+                        var isInputType = (typeTag === 'INPUT' || typeTag === 'TEXTAREA');
+                        if (!isInputType && !el.isContentEditable) {
+                            return { success: false, message: 'Target element <' + el.tagName.toLowerCase() + '> is not editable or an input control' };
+                        }
+                        if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
+                            try { el.ownerDocument.defaultView.frameElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
+                        }
                         el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-                        el.focus();
+                        try { el.focus(); } catch(e) {}
                         var textToType = actionObj.text || '';
+                        var elDocT = el.ownerDocument || document;
+                        var elWinT = elDocT.defaultView || window;
                         if (el.isContentEditable) {
                             try {
-                                document.execCommand('selectAll', false, null);
-                                document.execCommand('insertText', false, textToType);
+                                elDocT.execCommand('selectAll', false, null);
+                                elDocT.execCommand('insertText', false, textToType);
                             } catch(e) {
                                 el.innerText = textToType;
                             }
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new elWinT.Event('input', { bubbles: true }));
                             if (actionObj.submit) {
-                                var cEnterDown = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
-                                var cEnterUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                                var cEnterDown = new elWinT.KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                                var cEnterUp = new elWinT.KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
                                 el.dispatchEvent(cEnterDown);
                                 el.dispatchEvent(cEnterUp);
                             }
@@ -658,20 +839,25 @@ enum NomadDOMScript {
                         }
                         try {
                             // React 16+ controlled component compatibility
-                            var protoType = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+                            var protoType = (typeTag === 'TEXTAREA') ? ((elWinT.HTMLTextAreaElement && elWinT.HTMLTextAreaElement.prototype) || window.HTMLTextAreaElement.prototype) : ((elWinT.HTMLInputElement && elWinT.HTMLInputElement.prototype) || window.HTMLInputElement.prototype);
                             var setterType = Object.getOwnPropertyDescriptor(protoType, 'value')?.set;
                             if (setterType) { setterType.call(el, textToType); } else { el.value = textToType; }
                         } catch(e) {
                             el.value = textToType;
                         }
-                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        el.dispatchEvent(new elWinT.Event('input', { bubbles: true }));
+                        if (actionObj.submit || actionObj.blur || actionObj.change) {
+                            el.dispatchEvent(new elWinT.Event('change', { bubbles: true }));
+                        }
+                        if (actionObj.blur) {
+                            try { el.blur(); } catch(e) {}
+                        }
                         if (actionObj.submit) {
-                            var enterDown = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
-                            var enterUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                            var enterDown = new elWinT.KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                            var enterUp = new elWinT.KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
                             el.dispatchEvent(enterDown);
                             el.dispatchEvent(enterUp);
-                            var f = el.form || el.closest('form');
+                            var f = el.form || (el.closest ? el.closest('form') : null);
                             if (f) {
                                 try {
                                     if (typeof f.requestSubmit === 'function') f.requestSubmit();
@@ -711,6 +897,32 @@ enum NomadDOMScript {
                         var hasCtrl = parts.includes('Control') || parts.includes('Ctrl');
                         var hasShift = parts.includes('Shift');
                         var hasAlt = parts.includes('Alt') || parts.includes('Option');
+
+                        var validNamedKeys = {
+                            'enter': 'Enter', 'tab': 'Tab', 'escape': 'Escape', 'esc': 'Escape',
+                            'backspace': 'Backspace', 'delete': 'Delete', 'del': 'Delete',
+                            'arrowup': 'ArrowUp', 'up': 'ArrowUp',
+                            'arrowdown': 'ArrowDown', 'down': 'ArrowDown',
+                            'arrowleft': 'ArrowLeft', 'left': 'ArrowLeft',
+                            'arrowright': 'ArrowRight', 'right': 'ArrowRight',
+                            'home': 'Home', 'end': 'End', 'pageup': 'PageUp', 'pagedown': 'PageDown',
+                            'space': ' ', 'spacebar': ' ',
+                            'capslock': 'CapsLock', 'insert': 'Insert',
+                            'f1': 'F1', 'f2': 'F2', 'f3': 'F3', 'f4': 'F4',
+                            'f5': 'F5', 'f6': 'F6', 'f7': 'F7', 'f8': 'F8',
+                            'f9': 'F9', 'f10': 'F10', 'f11': 'F11', 'f12': 'F12',
+                            'meta': 'Meta', 'cmd': 'Meta', 'command': 'Meta',
+                            'control': 'Control', 'ctrl': 'Control',
+                            'shift': 'Shift', 'alt': 'Alt', 'option': 'Alt'
+                        };
+
+                        var normMain = mainKey.trim().toLowerCase();
+                        if (mainKey.length > 1) {
+                            if (!validNamedKeys[normMain]) {
+                                return { success: false, message: 'Unknown or unsupported key: ' + rawKey };
+                            }
+                            mainKey = validNamedKeys[normMain];
+                        }
 
                         var kopts = {
                             key: mainKey,
@@ -808,7 +1020,7 @@ enum NomadDOMScript {
                 var prev = document.getElementById('__nomad_highlight');
                 if (prev) prev.remove();
 
-                var rect = el.getBoundingClientRect();
+                var rect = this.getElementViewportRect(el);
                 var div = document.createElement('div');
                 div.id = '__nomad_highlight';
                 div.style.position = 'fixed';
@@ -839,7 +1051,7 @@ enum NomadDOMScript {
 
                 for (var id in this.elements) {
                     var el = this.elements[id];
-                    var rect = el.getBoundingClientRect();
+                    var rect = this.getElementViewportRect(el);
                     if (rect.width <= 0 || rect.height <= 0) continue;
 
                     var badge = document.createElement('span');
@@ -926,6 +1138,12 @@ extension Tab {
     /// Extracts a dense, token-efficient semantic tree and element index from the active page.
     @MainActor
     func getSemanticTree(limit: Int = 100, offset: Int = 0, viewportOnly: Bool = false, includeText: Bool = true) async throws -> NomadSnapshot {
+        if webView.isLoading {
+            let start = Date()
+            while webView.isLoading && Date().timeIntervalSince(start) < 0.5 {
+                try? await Task.sleep(nanoseconds: 30_000_000)
+            }
+        }
         await ensureNomadScriptInjected()
         let opts: [String: Any] = ["limit": limit, "offset": offset, "viewportOnly": viewportOnly, "includeText": includeText]
         let optsData = (try? JSONSerialization.data(withJSONObject: opts)) ?? Data()
@@ -1028,9 +1246,10 @@ extension Tab {
             let rectScript = """
             (function() {
                 var el = window.__nomad && window.__nomad.elements && window.__nomad.elements['\(elId)'];
+                if (!el && window.__nomad && window.__nomad.findInTree) { el = window.__nomad.findInTree(document, '\(elId)'); }
                 if (!el) { el = document.querySelector('[data-nomad-id="\(elId)"]'); }
                 if (el) {
-                    var r = el.getBoundingClientRect();
+                    var r = (window.__nomad && window.__nomad.getElementViewportRect) ? window.__nomad.getElementViewportRect(el) : el.getBoundingClientRect();
                     return { x: r.left, y: r.top, width: r.width, height: r.height };
                 }
                 return null;
@@ -1043,6 +1262,8 @@ extension Tab {
                let h = (dict["height"] as? NSNumber)?.doubleValue,
                w > 0 && h > 0 {
                 targetRect = CGRect(x: x, y: y, width: w, height: h)
+            } else {
+                throw NSError(domain: "NomadAgent", code: -5, userInfo: [NSLocalizedDescriptionKey: "Element '\(elId)' not found or has zero dimensions for screenshot crop"])
             }
         }
 
