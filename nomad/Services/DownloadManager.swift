@@ -182,13 +182,11 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
 
     func cancel(item: DownloadItem) {
         item.state = .cancelled
-        for (key, dl) in retainedDownloads {
-            if downloads.first(where: { $0.id == item.id }) != nil {
-                dl.cancel { _ in }
-                retainedDownloads.removeValue(forKey: key)
-                progressObservers.removeValue(forKey: key)
-                break
-            }
+        if let key = downloadItems.first(where: { $0.value.id == item.id })?.key {
+            retainedDownloads[key]?.cancel { _ in }
+            retainedDownloads.removeValue(forKey: key)
+            downloadItems.removeValue(forKey: key)
+            progressObservers.removeValue(forKey: key)
         }
     }
 

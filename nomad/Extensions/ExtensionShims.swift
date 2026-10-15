@@ -111,9 +111,9 @@ enum ExtensionShims {
         }
 
         // Content scripts too — there only Chrome's behaviour is mended. One
-        // that runs in the page's own world has Search's passkey patch before
+        // that runs in the page's own world has Nomad's passkey patch before
         // it: a password manager's there keeps a reference to
-        // navigator.credentials as it finds it, and that has to be Search's,
+        // navigator.credentials as it finds it, and that has to be Nomad's,
         // not WebKit's (see Passkeys.swift).
         if let entries = manifest["content_scripts"] as? [[String: Any]] {
             manifest["content_scripts"] = entries.map { entry -> [String: Any] in
@@ -234,7 +234,7 @@ enum ExtensionShims {
       // A page's own world, where an extension's MAIN-world script runs with
       // this before it, has no extension APIs. Nothing to mend there, and
       // nothing may be left there for a page to see: Safari leaves nothing.
-      // (There, Search's passkey patch holds navigator.credentials.)
+      // (There, Nomad's passkey patch holds navigator.credentials.)
       const ours = (() => { try { return !!(chrome && chrome.runtime && chrome.runtime.id); } catch (e) { return false; } })();
       if (!ours || root.__searchShim) return;
       // Bitwarden's bundled TypeScript uses these as computed class keys
@@ -2457,7 +2457,7 @@ enum ExtensionShims {
       // than the extension's own onMessage. The list lives with the browser,
       // and is registered again whenever the worker starts.
       const scripting = chrome.scripting;
-      // What an extension registers for a page's own world has Search's
+      // What an extension registers for a page's own world has Nomad's
       // passkey patch before it, as its manifest's do (see prepare): a
       // password manager keeps a reference to navigator.credentials as it
       // finds it, and falls back to that. An update that names no world gets

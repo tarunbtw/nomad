@@ -41,9 +41,11 @@ final class Lights: NSObject {
             NSWindow.didResignKeyNotification,
             NSWindow.didExitFullScreenNotification,
             NSWindow.didChangeScreenNotification,
+            NSWindow.willCloseNotification,
         ] {
             centre.addObserver(self, selector: #selector(place), name: name, object: window)
         }
+        centre.addObserver(self, selector: #selector(windowWillClose), name: NSWindow.willCloseNotification, object: window)
 
         let buttons = self.buttons
         if let bar = buttons.first?.superview, let container = bar.superview {
@@ -53,6 +55,17 @@ final class Lights: NSObject {
             }
         }
         place()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) {
+        NotificationCenter.default.removeObserver(self)
+        if let window = window {
+            Lights.kept.removeValue(forKey: ObjectIdentifier(window))
+        }
     }
 
     private var buttons: [NSButton] {

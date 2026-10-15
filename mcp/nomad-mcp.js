@@ -17,15 +17,22 @@ const os = require('node:os');
 const NOMAD_PORT = parseInt(process.env.NOMAD_AGENT_PORT || '9222', 10);
 const HOST = '127.0.0.1';
 
+let cachedAgentToken = null;
+
 /**
- * Resolves local bearer token from NOMAD_TOKEN or ~/.nomad/agent-token
+ * Resolves local bearer token from NOMAD_TOKEN or ~/.nomad/agent-token (cached in memory)
  */
-function getAgentToken() {
-    if (process.env.NOMAD_TOKEN) return process.env.NOMAD_TOKEN.trim();
+function getAgentToken(forceRefresh = false) {
+    if (!forceRefresh && cachedAgentToken) return cachedAgentToken;
+    if (process.env.NOMAD_TOKEN) {
+        cachedAgentToken = process.env.NOMAD_TOKEN.trim();
+        return cachedAgentToken;
+    }
     try {
         const tokenPath = path.join(os.homedir(), '.nomad', 'agent-token');
         if (fs.existsSync(tokenPath)) {
-            return fs.readFileSync(tokenPath, 'utf8').trim();
+            cachedAgentToken = fs.readFileSync(tokenPath, 'utf8').trim();
+            return cachedAgentToken;
         }
     } catch (e) {}
     return null;
@@ -55,6 +62,9 @@ function callNomad(method, pathStr, body = null) {
         };
 
         const req = http.request(options, (res) => {
+            if (res.statusCode === 401) {
+                cachedAgentToken = null;
+            }
             const chunks = [];
             res.on('data', (chunk) => chunks.push(chunk));
             res.on('end', () => {

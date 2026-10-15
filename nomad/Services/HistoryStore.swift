@@ -9,7 +9,7 @@ import Foundation
 import Combine
 
 /// Represents a visited URL record in Nomad's history.
-struct HistoryItem: Codable, Identifiable, Equatable {
+struct HistoryItem: Codable, Identifiable, Equatable, Sendable {
     var id: UUID = UUID()
     let url: String
     let title: String
@@ -168,10 +168,13 @@ final class HistoryStore: ObservableObject {
     }
 
     private func save() {
+        let snapshot = self.items
         let url = HistoryStore.storageURL
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(items) {
-            try? data.write(to: url, options: .atomic)
+        Task.detached(priority: .background) {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if let data = try? JSONEncoder().encode(snapshot) {
+                try? data.write(to: url, options: .atomic)
+            }
         }
     }
 
