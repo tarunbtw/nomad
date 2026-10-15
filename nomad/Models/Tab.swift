@@ -138,6 +138,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
 
     @Published var swipeState: SwipeGestureState? = nil
     @Published var lastNavigationError: String? = nil
+    @Published var lastDialog: String? = nil
     
     /// The retained custom web view for this tab.
     private(set) var webView: BrowserWebView
@@ -298,7 +299,9 @@ final class Tab: NSObject, Identifiable, ObservableObject {
 
         self.isBlank = (url.absoluteString == "about:blank")
         self.favicon = nil
+        self.lastDialog = nil
         webView.setMagnification(1.0, centeredAt: .zero)
+        webView.evaluateJavaScript("window.scrollTo(0, 0)", completionHandler: nil)
         if url.isFileURL {
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         } else {
@@ -861,16 +864,19 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
 
     // MARK: - Non-blocking JavaScript Alert / Confirm / Prompt handling
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        self.lastDialog = message
         appendConsoleEntry(level: .info, message: "[Dialog Alert] \(message)")
         completionHandler()
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        self.lastDialog = message
         appendConsoleEntry(level: .info, message: "[Dialog Confirm] \(message) -> Accepted")
         completionHandler(true)
     }
 
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        self.lastDialog = prompt
         appendConsoleEntry(level: .info, message: "[Dialog Prompt] \(prompt)")
         completionHandler(defaultText ?? "")
     }

@@ -10,26 +10,47 @@
 
 const http = require('node:http');
 const readline = require('node:readline');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
 
 const NOMAD_PORT = parseInt(process.env.NOMAD_AGENT_PORT || '9222', 10);
 const HOST = '127.0.0.1';
 
 /**
+ * Resolves local bearer token from NOMAD_TOKEN or ~/.nomad/agent-token
+ */
+function getAgentToken() {
+    if (process.env.NOMAD_TOKEN) return process.env.NOMAD_TOKEN.trim();
+    try {
+        const tokenPath = path.join(os.homedir(), '.nomad', 'agent-token');
+        if (fs.existsSync(tokenPath)) {
+            return fs.readFileSync(tokenPath, 'utf8').trim();
+        }
+    } catch (e) {}
+    return null;
+}
+
+/**
  * Perform an HTTP request to Nomad's local agent server.
  */
-function callNomad(method, path, body = null) {
+function callNomad(method, pathStr, body = null) {
     return new Promise((resolve, reject) => {
         const payload = body ? JSON.stringify(body) : null;
+        const token = getAgentToken();
+        const reqTimeout = Math.max(10000, ((body && (body.timeoutMs || body.durationMs)) || 0) + 5000);
+        const headers = {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+            ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {})
+        };
         const options = {
             hostname: HOST,
             port: NOMAD_PORT,
-            path: path,
+            path: pathStr,
             method: method,
-            headers: {
-                'Content-Type': 'application/json',
-                ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {})
-            },
-            timeout: 10000
+            headers: headers,
+            timeout: reqTimeout
         };
 
         const req = http.request(options, (res) => {
@@ -67,6 +88,15 @@ function callNomad(method, path, body = null) {
         }
         req.end();
     });
+}
+
+function formatToolResponse(res, customText = null) {
+    const isErr = Boolean(res && typeof res === 'object' && (res.error || res.success === false || (res.code && String(res.code).startsWith('EVAL_'))));
+    const text = customText !== null ? customText : (typeof res === 'string' ? res : JSON.stringify(res, null, 2));
+    return {
+        content: [{ type: 'text', text }],
+        isError: isErr
+    };
 }
 
 const TOOLS = [
@@ -136,6 +166,10 @@ const TOOLS = [
                     type: 'string',
                     enum: ['url', 'back', 'forward', 'reload'],
                     description: 'Navigation action. If not specified, defaults to "url".'
+                },
+                allowLocalFiles: {
+                    type: 'boolean',
+                    description: 'Explicitly allow navigation to file:// URLs (default false)'
                 }
             },
             additionalProperties: false
@@ -152,13 +186,13 @@ const TOOLS = [
     },
     {
         name: 'nomad_action',
-        description: 'Execute an atomic interaction in the active tab (click, hover, type, clear, press key chord, selectOption, scroll, highlight). Best used with elementId from nomad_snapshot (e.g. "e1") or CSS selector fallback. Fully compatible with React controlled components.',
+        description: 'Execute an atomic interaction in the active tab (click, hover, type, clear, press key chord, selectOption, scroll, drag, highlight). Best used with elementId from nomad_snapshot (e.g. "e1") or CSS selector fallback. Fully compatible with React controlled components.',
         inputSchema: {
             type: 'object',
             properties: {
                 type: {
                     type: 'string',
-                    enum: ['click', 'hover', 'type', 'clear', 'press', 'selectOption', 'scroll', 'highlight'],
+                    enum: ['click', 'hover', 'type', 'clear', 'press', 'selectOption', 'scroll', 'drag', 'highlight'],
                     description: 'Type of action to execute'
                 },
                 elementId: {
@@ -236,6 +270,10 @@ const TOOLS = [
                     enum: ['get', 'set', 'clear'],
                     description: 'Cookie operation (default: get)'
                 },
+                allDomains: {
+                    type: 'boolean',
+                    description: 'When true, inspect or clear cookies across all domains, not just the active tab domain'
+                },
                 name: { type: 'string', description: 'Cookie name (for "set")' },
                 value: { type: 'string', description: 'Cookie value (for "set")' },
                 domain: { type: 'string', description: 'Domain name for the cookie' },
@@ -268,7 +306,12 @@ const TOOLS = [
         inputSchema: {
             type: 'object',
             properties: {
-                script: { type: 'string', description: 'JavaScript code to execute' }
+                script: { type: 'string', description: 'JavaScript code to execute' },
+                world: {
+                    type: 'string',
+                    enum: ['page', 'isolated'],
+                    description: 'Execution context world (default: page)'
+                }
             },
             required: ['script'],
             additionalProperties: false
@@ -280,73 +323,78 @@ async function handleToolCall(name, args) {
     switch (name) {
         case 'nomad_status': {
             const res = await callNomad('GET', '/status');
-            return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            return formatToolResponse(res);
         }
         case 'nomad_tabs': {
             const res = await callNomad('GET', '/tabs');
-            return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            return formatToolResponse(res);
         }
         case 'nomad_new_tab': {
             const res = await callNomad('POST', '/tabs/new', args);
-            return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            return formatToolResponse(res);
         }
         case 'nomad_switch_tab': {
             const res = await callNomad('POST', '/tabs/switch', args);
-            return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            return formatToolResponse(res);
         }
         case 'nomad_close_tab': {
             const res = await callNomad('POST', '/tabs/close', args);
-            return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            return formatToolResponse(res);
         }
         case 'nomad_navigate': {
             const res = await callNomad('POST', '/navigate', args);
-            return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            return formatToolResponse(res);
         }
         case 'nomad_snapshot': {
             const res = await callNomad('GET', '/snapshot');
             const summary = res.summary || '';
             const tokens = res.tokenEstimate || 0;
             const text = `=== Nomad Semantic Perception ===\nTokens: ~${tokens}\nURL: ${res.url || ''}\nTitle: ${res.title || ''}\n\n${summary}`;
-            return [{ type: 'text', text }];
+            return formatToolResponse(res, text);
         }
         case 'nomad_action': {
             const res = await callNomad('POST', '/action', args);
-            return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            return formatToolResponse(res);
         }
         case 'nomad_wait': {
             const res = await callNomad('POST', '/wait', args);
-            return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            return formatToolResponse(res);
         }
         case 'nomad_cookies': {
             const act = (args && args.action) || 'get';
             if (act === 'get') {
-                const res = await callNomad('GET', '/cookies');
-                return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+                const qs = args && args.allDomains ? '?allDomains=true' : '';
+                const res = await callNomad('GET', `/cookies${qs}`);
+                return formatToolResponse(res);
             } else if (act === 'clear') {
-                const res = await callNomad('DELETE', '/cookies');
-                return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+                const qs = args && args.allDomains ? '?allDomains=true' : '';
+                const res = await callNomad('DELETE', `/cookies${qs}`);
+                return formatToolResponse(res);
             } else {
                 const res = await callNomad('POST', '/cookies', args);
-                return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+                return formatToolResponse(res);
             }
         }
         case 'nomad_screenshot': {
             const isLabeled = Boolean(args && args.labeled);
-            const path = isLabeled ? '/screenshot?labeled=true' : '/screenshot';
-            const res = await callNomad('GET', path);
+            const pathStr = isLabeled ? '/screenshot?labeled=true' : '/screenshot';
+            const res = await callNomad('GET', pathStr);
             if (res && res._rawImage) {
                 const b64 = res._rawImage.toString('base64');
-                return [{
-                    type: 'image',
-                    data: b64,
-                    mimeType: 'image/png'
-                }];
+                return {
+                    content: [{
+                        type: 'image',
+                        data: b64,
+                        mimeType: 'image/png'
+                    }],
+                    isError: false
+                };
             }
-            return [{ type: 'text', text: 'Screenshot captured.' }];
+            return formatToolResponse(res, 'Screenshot captured.');
         }
         case 'nomad_evaluate': {
             const res = await callNomad('POST', '/evaluate', args);
-            return [{ type: 'text', text: JSON.stringify(res, null, 2) }];
+            return formatToolResponse(res);
         }
         default:
             throw new Error(`Unknown tool: ${name}`);
@@ -401,8 +449,8 @@ rl.on('line', async (line) => {
         const toolName = params ? params.name : null;
         const toolArgs = (params && params.arguments) || {};
         try {
-            const content = await handleToolCall(toolName, toolArgs);
-            sendResponse(id, { content, isError: false });
+            const outcome = await handleToolCall(toolName, toolArgs);
+            sendResponse(id, { content: outcome.content, isError: Boolean(outcome.isError) });
         } catch (err) {
             sendResponse(id, {
                 content: [{ type: 'text', text: `Error: ${err.message}` }],

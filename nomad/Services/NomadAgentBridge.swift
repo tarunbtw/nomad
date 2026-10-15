@@ -42,6 +42,7 @@ struct NomadElement: Codable {
     var isInShadowRoot: Bool?
     var src: String?
     var alt: String?
+    var href: String?
 }
 
 /// Bounding rectangle in viewport coordinates.
@@ -205,7 +206,7 @@ enum NomadDOMScript {
                 var vpW = window.innerWidth;
                 var vpH = window.innerHeight;
 
-                // Recursive collector penetrating open Shadow DOM roots
+                // Recursive collector penetrating open Shadow DOM roots and same-origin / srcdoc iframes
                 function collectNodes(root, list) {
                     if (!root) return;
                     var selector = 'a, button, input, textarea, select, details, summary, h1, h2, h3, img, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [role="heading"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"], iframe';
@@ -218,14 +219,30 @@ enum NomadDOMScript {
                         for (var j = 0; j < all.length; j++) {
                             if (all[j].shadowRoot) {
                                 collectNodes(all[j].shadowRoot, list);
+                            } else if (all[j].tagName === 'IFRAME') {
+                                try {
+                                    var fDoc = all[j].contentDocument || (all[j].contentWindow ? all[j].contentWindow.document : null);
+                                    if (fDoc) collectNodes(fDoc, list);
+                                } catch(e) {}
                             }
                         }
                     } catch(e) {}
                 }
 
-                // Resolve accessible label using ARIA, label tags, placeholder, title, sibling labels, and text
+                // Resolve accessible label using ARIA, label tags, placeholder, title, adjacent labels, and text
                 function getAccessibleLabel(el) {
                     try {
+                        // Strict redaction of password inputs: NEVER return value or text
+                        if (el.tagName === 'INPUT' && el.type === 'password') {
+                            if (el.getAttribute('aria-label')) return el.getAttribute('aria-label').trim();
+                            if (el.placeholder) return el.placeholder.trim();
+                            if (el.id) {
+                                var pwL = document.querySelector('label[for="' + el.id + '"]');
+                                if (pwL) return (pwL.innerText || pwL.textContent || '').trim();
+                            }
+                            return '';
+                        }
+
                         if (el.getAttribute('aria-label')) {
                             return el.getAttribute('aria-label').trim();
                         }
@@ -246,12 +263,14 @@ enum NomadDOMScript {
                             var txt = (cloned.innerText || cloned.textContent || '').trim();
                             if (txt) return txt;
                         }
-                        // Sibling or adjacent label in parent container (common in TodoMVC, list items, and modern custom form rows)
-                        if (el.parentElement) {
-                            var sibLabel = el.parentElement.querySelector('label');
-                            if (sibLabel && sibLabel !== el) {
-                                var sibText = (sibLabel.innerText || sibLabel.textContent || '').trim();
-                                if (sibText) return sibText;
+                        // Adjacent label ONLY for form controls (prevents <label> text bleeding onto unrelated links/buttons)
+                        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+                            var prev = el.previousElementSibling;
+                            var next = el.nextElementSibling;
+                            var adjLabel = (prev && prev.tagName === 'LABEL') ? prev : ((next && next.tagName === 'LABEL') ? next : null);
+                            if (adjLabel) {
+                                var adjText = (adjLabel.innerText || adjLabel.textContent || '').trim();
+                                if (adjText) return adjText;
                             }
                         }
                         if (el.placeholder) return el.placeholder.trim();
@@ -259,7 +278,8 @@ enum NomadDOMScript {
                         if (el.tagName === 'INPUT' && (el.type === 'submit' || el.type === 'button') && el.value) {
                             return String(el.value).trim();
                         }
-                        return (el.innerText || el.textContent || el.value || '').trim();
+                        var fallbackVal = (el.tagName === 'INPUT' && el.type === 'password') ? '' : (el.value || '');
+                        return (el.innerText || el.textContent || fallbackVal).trim();
                     } catch(e) {
                         return '';
                     }
@@ -355,6 +375,7 @@ enum NomadDOMScript {
                     var focused = Boolean(document.activeElement === el);
                     var readOnly = Boolean(el.readOnly || el.getAttribute('aria-readonly') === 'true');
                     var inShadow = Boolean(el.getRootNode && el.getRootNode() instanceof ShadowRoot);
+                    var href = (tag === 'a' || tag === 'area') ? (el.getAttribute('href') || el.href || null) : null;
 
                     results.push({
                         id: id,
@@ -374,6 +395,7 @@ enum NomadDOMScript {
                         isInShadowRoot: inShadow,
                         src: src,
                         alt: alt,
+                        href: href,
                         bounds: {
                             x: Math.round(rect.left),
                             y: Math.round(rect.top),
@@ -396,6 +418,7 @@ enum NomadDOMScript {
                     desc += ' <' + item.tag;
                     if (item.type) desc += ' type="' + item.type + '"';
                     if (item.role && item.role !== item.tag) desc += ' role="' + item.role + '"';
+                    if (item.href) desc += ' href="' + item.href + '"';
                     if (item.src) desc += ' src="' + item.src + '"';
                     if (item.className) desc += ' class="' + item.className + '"';
                     if (item.text) desc += ' "' + item.text + '"';
@@ -522,6 +545,16 @@ enum NomadDOMScript {
                         if (!el) return { success: false, message: 'No target element for clear action' };
                         el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
                         el.focus();
+                        if (el.isContentEditable) {
+                            try {
+                                document.execCommand('selectAll', false, null);
+                                document.execCommand('delete', false, null);
+                            } catch(e) {
+                                el.innerText = '';
+                            }
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            return { success: true, message: 'Cleared value in ' + targetId, elementId: targetId };
+                        }
                         try {
                             var proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
                             var setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
@@ -538,6 +571,22 @@ enum NomadDOMScript {
                         el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
                         el.focus();
                         var textToType = actionObj.text || '';
+                        if (el.isContentEditable) {
+                            try {
+                                document.execCommand('selectAll', false, null);
+                                document.execCommand('insertText', false, textToType);
+                            } catch(e) {
+                                el.innerText = textToType;
+                            }
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            if (actionObj.submit) {
+                                var cEnterDown = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                                var cEnterUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                                el.dispatchEvent(cEnterDown);
+                                el.dispatchEvent(cEnterUp);
+                            }
+                            return { success: true, message: 'Typed into ' + targetId, elementId: targetId };
+                        }
                         try {
                             // React 16+ controlled component compatibility
                             var protoType = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
@@ -562,6 +611,25 @@ enum NomadDOMScript {
                             }
                         }
                         return { success: true, message: 'Typed into ' + targetId, elementId: targetId };
+
+                    case 'drag':
+                        if (!el) return { success: false, message: 'No source element for drag action' };
+                        el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                        var srcRect = el.getBoundingClientRect();
+                        var startX = Math.round(srcRect.left + srcRect.width / 2);
+                        var startY = Math.round(srcRect.top + srcRect.height / 2);
+                        var destX = actionObj.toX !== undefined ? actionObj.toX : startX;
+                        var destY = actionObj.toY !== undefined ? actionObj.toY : startY;
+
+                        var dt = new DataTransfer();
+                        el.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, clientX: startX, clientY: startY, dataTransfer: dt }));
+
+                        var destEl = document.elementFromPoint(destX, destY) || el;
+                        destEl.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, clientX: destX, clientY: destY, dataTransfer: dt }));
+                        destEl.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: destX, clientY: destY, dataTransfer: dt }));
+                        el.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, clientX: destX, clientY: destY, dataTransfer: dt }));
+
+                        return { success: true, message: 'Dragged ' + (targetId || 'element') + ' to (' + destX + ', ' + destY + ')' };
 
                     case 'press':
                         var rawKey = actionObj.key || actionObj.text || 'Enter';
@@ -727,17 +795,20 @@ enum NomadDOMScript {
                     var maxWait = timeoutMs || 5000;
                     var timer = null;
                     var observer = null;
+                    var mutationCount = 0;
 
                     var maxTimer = setTimeout(function() {
                         cleanup();
-                        resolve({ success: false, reason: 'timeout', message: 'Exceeded max wait of ' + maxWait + 'ms' });
+                        resolve({ success: false, reason: 'timeout', message: 'Exceeded max wait of ' + maxWait + 'ms (' + mutationCount + ' mutations)' });
                     }, maxWait);
 
                     function resetTimer() {
                         if (timer) clearTimeout(timer);
                         timer = setTimeout(function() {
                             cleanup();
-                            resolve({ success: true, message: 'DOM stabilized for ' + quiet + 'ms' });
+                            requestAnimationFrame(function() {
+                                resolve({ success: true, message: 'DOM stabilized for ' + quiet + 'ms (' + mutationCount + ' mutations observed)', mutations: mutationCount });
+                            });
                         }, quiet);
                     }
 
@@ -748,10 +819,11 @@ enum NomadDOMScript {
                     }
 
                     try {
-                        observer = new MutationObserver(function() {
+                        observer = new MutationObserver(function(mutations) {
+                            mutationCount += (mutations ? mutations.length : 1);
                             resetTimer();
                         });
-                        observer.observe(document.body || document.documentElement, {
+                        observer.observe(document.documentElement || document.body, {
                             childList: true,
                             subtree: true,
                             attributes: true,

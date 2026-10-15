@@ -23,9 +23,11 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 | `nomad_new_tab` | Open a new tab (optional `url`, `isIncognito`, `select`) | ~50 tokens |
 | `nomad_switch_tab` | Switch focused active tab by `id` | ~30 tokens |
 | `nomad_close_tab` | Close tab by `id` | ~30 tokens |
-| `nomad_navigate` | Navigate active tab to a new URL | ~50 tokens |
-| `nomad_snapshot` | **Primary perception:** Dense semantic markdown of visible interactive elements with references (`[e1]`, `[e2]`, ...) | ~300 tokens |
-| `nomad_action` | Dispatch atomic actions: `click`, `type`, `press`, `scroll`, `highlight` using element reference `elementId` | ~40 tokens |
+| `nomad_navigate` | Navigate active tab to URL, or go back, forward, reload (`action: 'back'|'forward'|'reload'|'url'`) | ~50 tokens |
+| `nomad_wait` | Wait for DOM mutation stability, a specific CSS selector, or timeout (essential for SPAs) | ~40 tokens |
+| `nomad_cookies` | Inspect, inject, or clear session cookies for authentication and state | ~80 tokens |
+| `nomad_snapshot` | **Primary perception:** Dense semantic markdown of visible interactive elements (including Shadow DOM, occlusion checks, and accessible states) | ~300 tokens |
+| `nomad_action` | Dispatch atomic actions: `click`, `hover`, `type` (React-compatible), `clear`, `press` (key chords), `selectOption`, `scroll`, `drag`, `highlight` | ~40 tokens |
 | `nomad_screenshot` | GPU snapshot; set `labeled: true` for vision-grounded element numbered badges | Base64 image |
 | `nomad_evaluate` | Run arbitrary JavaScript in page context and return result | Minimal |
 
@@ -75,10 +77,14 @@ nomad_action({
 
 Supported action types:
 - `click`: Triggers synthetic PointerDown, PointerUp, and Click events at the element's bounding center.
-- `type`: Clears/focuses element and types `text` with native input event dispatch.
-- `press`: Simulates key press (e.g. `text: "Enter"`).
-- `scroll`: Scrolls the viewport by `scrollDeltaY` pixels (e.g. `300` to scroll down).
-- `highlight`: Briefly flashes a blue bounding box over the element for visual confirmation.
+- `hover`: Dispatches pointerover/pointerenter/mousemove sequence to open dropdown menus or tooltips.
+- `type`: Clears/focuses element and sets value via prototype setter (React 16+ and contentEditable compatible) with native input/change dispatch.
+- `clear`: Wipes input/textarea/contentEditable value and triggers change events.
+- `press`: Simulates key press or modifier chord (e.g. `text: "Enter"`, `text: "Meta+A"`, `text: "Shift+Tab"`).
+- `selectOption`: Chooses dropdown `<option>` by `optionValue` or `optionText`.
+- `scroll`: Scrolls the viewport by `scrollDeltaY` pixels (e.g. `300` to scroll down, `-300` to scroll up) or `scrollDeltaX`.
+- `drag`: Dispatches standard HTML5 drag-and-drop sequence (`dragstart`, `dragover`, `drop`, `dragend`) to destination (`toX`, `toY`).
+- `highlight`: Briefly flashes an orange highlight box over the element for visual confirmation.
 
 ### 4. Vision Grounding (Multimodal Verification)
 When visual spatial layout is required, capture a vision-grounded screenshot:
@@ -86,6 +92,10 @@ When visual spatial layout is required, capture a vision-grounded screenshot:
 nomad_screenshot({ "labeled": true })
 ```
 This renders numbered visual badges matching the snapshot references (`[1]`, `[2]`, ...) directly on the WebKit GPU frame before capturing the PNG, giving vision models exact pixel grounding.
+
+> [!TIP]
+> **Animated SPAs & Entrance Transitions (Framer, WebGL, Canvas):**
+> Modern landing pages (such as Framer or WebGL showcases) frequently utilize initial entrance fade-in animations (`opacity: 0 -> 1` over 500–1000ms). When observing such pages, call `nomad_wait({ mode: "timeout", durationMs: 1200 })` or wait for stability before capturing the reference screenshot, and visually inspect the frame before proceeding.
 
 ---
 

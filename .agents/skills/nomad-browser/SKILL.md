@@ -27,7 +27,7 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 | `nomad_wait` | Wait for DOM mutation stability, a specific CSS selector, or timeout (essential for SPAs) | ~40 tokens |
 | `nomad_cookies` | Inspect, inject, or clear session cookies for authentication and state | ~80 tokens |
 | `nomad_snapshot` | **Primary perception:** Dense semantic markdown of visible interactive elements (including Shadow DOM, occlusion checks, and accessible states) | ~300 tokens |
-| `nomad_action` | Dispatch atomic actions: `click`, `hover`, `type` (React-compatible), `clear`, `press` (key chords), `selectOption`, `scroll`, `highlight` | ~40 tokens |
+| `nomad_action` | Dispatch atomic actions: `click`, `hover`, `type` (React-compatible), `clear`, `press` (key chords), `selectOption`, `scroll`, `drag`, `highlight` | ~40 tokens |
 | `nomad_screenshot` | GPU snapshot; set `labeled: true` for vision-grounded element numbered badges | Base64 image |
 | `nomad_evaluate` | Run arbitrary JavaScript in page context and return result | Minimal |
 
@@ -78,11 +78,12 @@ nomad_action({
 Supported action types:
 - `click`: Triggers synthetic PointerDown, PointerUp, and Click events at the element's bounding center.
 - `hover`: Dispatches pointerover/pointerenter/mousemove sequence to open dropdown menus or tooltips.
-- `type`: Clears/focuses element and sets value via prototype setter (React 16+ compatible) with native input/change dispatch.
-- `clear`: Wipes input/textarea value and triggers change events.
+- `type`: Clears/focuses element and sets value via prototype setter (React 16+ and contentEditable compatible) with native input/change dispatch.
+- `clear`: Wipes input/textarea/contentEditable value and triggers change events.
 - `press`: Simulates key press or modifier chord (e.g. `text: "Enter"`, `text: "Meta+A"`, `text: "Shift+Tab"`).
 - `selectOption`: Chooses dropdown `<option>` by `optionValue` or `optionText`.
 - `scroll`: Scrolls the viewport by `scrollDeltaY` pixels (e.g. `300` to scroll down, `-300` to scroll up) or `scrollDeltaX`.
+- `drag`: Dispatches standard HTML5 drag-and-drop sequence (`dragstart`, `dragover`, `drop`, `dragend`) to destination (`toX`, `toY`).
 - `highlight`: Briefly flashes an orange highlight box over the element for visual confirmation.
 
 ### 4. Vision Grounding (Multimodal Verification)
