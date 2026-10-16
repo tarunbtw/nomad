@@ -8,9 +8,8 @@
 import SwiftUI
 import AppKit
 
-/// A calm, single-screen welcome experience shown on first launch.
-/// Inspired by minimalist editorial design: generous whitespace, elegant typography,
-/// a charming hand-drawn nomad mark, and a single prompt to start exploring.
+/// A lightweight, single-screen welcome experience shown on first launch.
+/// Fast, uncluttered, and built natively for macOS with Swift and WebKit.
 struct OnboardingView: View {
     @ObservedObject var settings: SettingsStore
     var onStart: (() -> Void)? = nil
@@ -68,7 +67,7 @@ struct OnboardingView: View {
                             .foregroundStyle(.primary)
                             .tracking(0.3)
 
-                        Text("A calm, minimal browser for macOS")
+                        Text("A fast, lightweight and agentic browser for macOS")
                             .font(.system(size: 13, weight: .regular))
                             .foregroundStyle(.secondary)
                     }
@@ -77,9 +76,8 @@ struct OnboardingView: View {
 
                     // Stage 3: Ethos & Core Principles
                     VStack(spacing: 6) {
-                        Text("Designed for focus, clarity, and speed.")
-                        Text("No noise, no surveillance, no bloat—just you and the open web.")
-                        Text("Engineered with native Swift, AppKit, and WebKit.")
+                        Text("Built  with Swift and WebKit.")
+                        Text("bare, fast and zero telemetry.")
                     }
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(.secondary.opacity(0.9))
