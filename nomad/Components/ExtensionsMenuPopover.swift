@@ -73,8 +73,8 @@ struct ExtensionsMenuPopover: View {
                             .font(.system(size: 11, weight: .medium))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 5)
-                            .background(settings.accentColor)
-                            .foregroundStyle(.white)
+                            .background(Color.primary)
+                            .foregroundStyle(Color(nsColor: .windowBackgroundColor))
                             .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
@@ -141,7 +141,7 @@ struct ExtensionsMenuPopover: View {
         return HStack(spacing: 10) {
             Image(systemName: "arrow.down.circle.fill")
                 .font(.system(size: 18))
-                .foregroundStyle(settings.accentColor)
+                .foregroundStyle(Color.primary)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(name)
@@ -174,8 +174,8 @@ struct ExtensionsMenuPopover: View {
                         .font(.system(size: 11, weight: .semibold))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(settings.accentColor)
-                        .foregroundStyle(.white)
+                        .background(Color.primary)
+                        .foregroundStyle(Color(nsColor: .windowBackgroundColor))
                         .cornerRadius(6)
                 }
                 .buttonStyle(.plain)
@@ -246,7 +246,7 @@ private struct ExtensionMenuRow: View {
             }) {
                 Image(systemName: ext.pinned ? "pin.fill" : "pin")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(ext.pinned ? settings.accentColor : Color.secondary.opacity(0.7))
+                    .foregroundStyle(ext.pinned ? Color.primary : Color.secondary.opacity(0.7))
                     .frame(width: 22, height: 22)
                     .contentShape(Rectangle())
             }

@@ -217,7 +217,7 @@ struct CommandPaletteView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(Color.secondary)
 
                     TextField("Type a command, tab, or bookmark... (Esc to close)", text: $query)
                         .textFieldStyle(.plain)
@@ -259,7 +259,7 @@ struct CommandPaletteView: View {
                                     HStack(spacing: 10) {
                                         Image(systemName: item.icon)
                                             .font(.system(size: 12, weight: .medium))
-                                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                                            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
                                             .frame(width: 20)
 
                                         VStack(alignment: .leading, spacing: 2) {
@@ -294,7 +294,7 @@ struct CommandPaletteView: View {
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 6)
                                     .background(
-                                        isSelected ? Color.accentColor.opacity(0.12) : Color.clear,
+                                        isSelected ? Color.primary.opacity(0.08) : Color.clear,
                                         in: RoundedRectangle(cornerRadius: 6, style: .continuous)
                                     )
                                     .contentShape(Rectangle())

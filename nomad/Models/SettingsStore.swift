@@ -186,7 +186,7 @@ final class SettingsStore: ObservableObject {
     }
 
     var accentColor: Color {
-        Color(red: 1.0, green: 0.44, blue: 0.0) // Nomad Amber
+        .primary
     }
 
     var customBgColor: Color {
@@ -199,6 +199,15 @@ final class SettingsStore: ObservableObject {
         case "kagi": return "Kagi"
         case "bing": return "Bing"
         default: return "DuckDuckGo"
+        }
+    }
+
+    var searchEngineLabel: String {
+        switch searchEngine {
+        case "google": return "Google"
+        case "kagi": return "Kagi"
+        case "bing": return "Bing"
+        default: return "DuckDuckGo (Privacy)"
         }
     }
 

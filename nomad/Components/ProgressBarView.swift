@@ -16,7 +16,7 @@ struct ProgressBarView: View {
             if tab.isLoading && tab.estimatedProgress > 0 && tab.estimatedProgress < 1.0 {
                 ZStack(alignment: .leading) {
                     Rectangle()
-                        .fill(Color.accentColor)
+                        .fill(Color.primary)
                         .frame(width: max(0, geometry.size.width * CGFloat(tab.estimatedProgress)), height: 2)
                         .animation(.linear(duration: 0.15), value: tab.estimatedProgress)
                 }

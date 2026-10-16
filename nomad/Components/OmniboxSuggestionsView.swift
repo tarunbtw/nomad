@@ -127,7 +127,7 @@ struct OmniboxSuggestionsView: View {
                     case .bookmark:
                         Image(systemName: "bookmark.fill")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(settings.accentColor)
+                            .foregroundStyle(Color.primary)
                     case .history:
                         Image(systemName: "clock.arrow.circlepath")
                             .font(.system(size: 11, weight: .regular))
@@ -169,7 +169,7 @@ struct OmniboxSuggestionsView: View {
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isHovered ? settings.accentColor.opacity(0.12) : Color.clear)
+                    .fill(isHovered ? Color.primary.opacity(0.08) : Color.clear)
             )
             .contentShape(Rectangle())
         }

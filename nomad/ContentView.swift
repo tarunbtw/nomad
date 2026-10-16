@@ -26,6 +26,7 @@ struct ContentView: View {
         .frame(minWidth: 640, minHeight: 420)
         .background(WindowConfigurator(isVibrant: settings.isVibrant))
         .preferredColorScheme(settings.colorScheme)
+        .tint(settings.accentColor)
         .onAppear {
             NomadAgentServer.shared.start(store: store)
         }

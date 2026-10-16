@@ -65,8 +65,12 @@ struct NavigationControls: View {
             Button(action: { isShowingExtensionsMenu.toggle() }) {
                 Image(systemName: "puzzlepiece.extension")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(isShowingExtensionsMenu ? settings.accentColor : Color.primary)
+                    .foregroundStyle(isShowingExtensionsMenu ? Color.primary : Color.secondary)
                     .frame(width: 24, height: 24)
+                    .background(
+                        isShowingExtensionsMenu ? Color.primary.opacity(0.08) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -82,17 +86,21 @@ struct NavigationControls: View {
                     ZStack {
                         Image(systemName: "arrow.down.circle")
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(downloadManager.hasActiveDownloads ? settings.accentColor : Color.primary)
+                            .foregroundStyle(downloadManager.hasActiveDownloads ? Color.primary : Color.secondary)
 
                         if downloadManager.hasActiveDownloads {
                             Circle()
                                 .trim(from: 0, to: downloadManager.overallProgress)
-                                .stroke(settings.accentColor, lineWidth: 1.5)
+                                .stroke(Color.primary, lineWidth: 1.5)
                                 .frame(width: 16, height: 16)
                                 .rotationEffect(.degrees(-90))
                         }
                     }
                     .frame(width: 24, height: 24)
+                    .background(
+                        isShowingDownloadsMenu ? Color.primary.opacity(0.08) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -111,7 +119,7 @@ struct NavigationControls: View {
             }) {
                 Image(systemName: isBookmarked ? "bookmark.fill" : "bookmark")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(isBookmarked ? settings.accentColor : Color.primary)
+                    .foregroundStyle(isBookmarked ? Color.primary : Color.secondary)
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
@@ -122,7 +130,6 @@ struct NavigationControls: View {
 
             let canInspect = !tab.isBlank && !tab.isInternalPage
 
-
             Button(action: {
                 guard canInspect else { return }
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
@@ -131,8 +138,12 @@ struct NavigationControls: View {
             }) {
                 Image(systemName: tab.isDevDrawerVisible ? "curlybraces.square.fill" : "curlybraces")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(tab.isDevDrawerVisible ? settings.accentColor : Color.primary)
+                    .foregroundStyle(tab.isDevDrawerVisible ? Color.primary : Color.secondary)
                     .frame(width: 24, height: 24)
+                    .background(
+                        tab.isDevDrawerVisible ? Color.primary.opacity(0.08) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -145,8 +156,12 @@ struct NavigationControls: View {
             Button(action: { store.openSettings() }) {
                 Image(systemName: isSettingsActive ? "gearshape.fill" : "gearshape")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(isSettingsActive ? settings.accentColor : Color.primary)
+                    .foregroundStyle(isSettingsActive ? Color.primary : Color.secondary)
                     .frame(width: 24, height: 24)
+                    .background(
+                        isSettingsActive ? Color.primary.opacity(0.08) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

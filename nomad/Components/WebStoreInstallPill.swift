@@ -55,10 +55,10 @@ struct WebStoreInstallPill: View {
                         .fill(
                             isInstalled
                                 ? Color.primary.opacity(0.06)
-                                : settings.accentColor.opacity(isHovered ? 0.9 : 1.0)
+                                : Color.primary.opacity(isHovered ? 0.88 : 1.0)
                         )
                 )
-                .foregroundStyle(isInstalled ? Color.primary : Color.white)
+                .foregroundStyle(isInstalled ? Color.primary : Color(nsColor: .windowBackgroundColor))
             }
             .buttonStyle(.plain)
             .disabled(isInstalled || localIsInstalling)

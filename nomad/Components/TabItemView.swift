@@ -128,7 +128,7 @@ struct TabItemView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(isEditing ? Color.accentColor.opacity(0.5) : (isActive ? Color.primary.opacity(0.06) : Color.clear), lineWidth: 1)
+                .strokeBorder(isEditing ? Color.primary.opacity(0.4) : (isActive ? Color.primary.opacity(0.06) : Color.clear), lineWidth: 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 7))
         .onHover { isHovered = $0 }

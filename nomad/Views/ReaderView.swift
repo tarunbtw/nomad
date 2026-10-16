@@ -124,7 +124,7 @@ struct ReaderView: View {
                                 Circle()
                                     .fill(th.bg)
                                     .frame(width: 16, height: 16)
-                                    .overlay(Circle().stroke(currentTheme == th ? Color.accentColor : currentTheme.secondaryText.opacity(0.3), lineWidth: currentTheme == th ? 2 : 1))
+                                    .overlay(Circle().stroke(currentTheme == th ? currentTheme.text : currentTheme.secondaryText.opacity(0.3), lineWidth: currentTheme == th ? 2 : 1))
                             }
                             .buttonStyle(.plain)
                             .help("\(th.rawValue) paper theme")

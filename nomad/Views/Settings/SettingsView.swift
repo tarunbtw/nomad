@@ -29,6 +29,12 @@ struct SettingsView: View {
     @State private var webStoreInput: String = ""
     @State private var extensionErrorMessage: String? = nil
     @State private var isInstallingExtension: Bool = false
+    private let searchEngines: [(id: String, label: String)] = [
+        ("duckduckgo", "DuckDuckGo (Privacy)"),
+        ("google", "Google"),
+        ("kagi", "Kagi"),
+        ("bing", "Bing")
+    ]
 
     enum Section: String, CaseIterable, Identifiable {
         case general = "General"
@@ -86,6 +92,7 @@ struct SettingsView: View {
                 : Color(nsColor: .windowBackgroundColor)
         )
         .preferredColorScheme(settings.colorScheme)
+        .tint(settings.accentColor)
         .onAppear {
             hexInputText = settings.customBgHex.replacingOccurrences(of: "#", with: "")
         }
@@ -412,15 +419,54 @@ struct SettingsView: View {
 
             // Default Search Engine
             card(title: "Default Search Engine") {
-                Picker("Search Engine", selection: $settings.searchEngine) {
-                    Text("DuckDuckGo (Privacy)").tag("duckduckgo")
-                    Text("Google").tag("google")
-                    Text("Kagi").tag("kagi")
-                    Text("Bing").tag("bing")
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Search Engine")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Text("Select your preferred search engine for the address bar.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Menu {
+                        ForEach(searchEngines, id: \.id) { engine in
+                            Button(action: {
+                                settings.searchEngine = engine.id
+                            }) {
+                                if settings.searchEngine == engine.id {
+                                    Label(engine.label, systemImage: "checkmark")
+                                } else {
+                                    Text(engine.label)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text(settings.searchEngineLabel)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Color.primary)
+
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(Color.secondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.primary.opacity(0.06))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+                        )
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                 }
-                .pickerStyle(.menu)
-                .foregroundStyle(.primary)
-                .frame(maxWidth: 320)
             }
 
             // Welcome Experience
@@ -798,10 +844,10 @@ struct SettingsView: View {
                                         if !ext.fromStore {
                                             Text("Unpacked")
                                                 .font(.system(size: 9, weight: .semibold))
-                                                .padding(.horizontal, 4)
-                                                .padding(.vertical, 1)
-                                                .background(Color.orange.opacity(0.15), in: Capsule())
-                                                .foregroundStyle(.orange)
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 2)
+                                                .background(Color.primary.opacity(0.08), in: Capsule())
+                                                .foregroundStyle(.secondary)
                                         }
                                     }
                                 }
