@@ -23,13 +23,13 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 | `nomad_new_tab` | Open a new tab (optional `url`, `isIncognito`, `select`) | ~50 tokens |
 | `nomad_switch_tab` | Switch focused active tab by `id` | ~30 tokens |
 | `nomad_close_tab` | Close tab by `id` | ~30 tokens |
-| `nomad_navigate` | Navigate active tab to URL, or go back, forward, reload (`action: 'back'|'forward'|'reload'|'url'`) | ~50 tokens |
+| `nomad_navigate` | Navigate active tab to URL, or go back, forward, reload (`action: 'back'|'forward'|'reload'|'url'`, optional `allowLocalFiles: true` for `file://` URLs) | ~50 tokens |
 | `nomad_wait` | Wait for DOM stability (`mode: 'stability'`), CSS selector, URL (`mode: 'url'`), network idle (`mode: 'networkidle'`), navigation, or timeout | ~40 tokens |
-| `nomad_cookies` | Inspect, inject, or clear session cookies for authentication and state | ~80 tokens |
+| `nomad_cookies` | Inspect, inject, or clear session cookies for authentication and state (`action: 'get'|'set'|'clear'`, optional `allDomains: true`) | ~80 tokens |
 | `nomad_snapshot` | **Primary perception:** Dense semantic markdown of interactive & text elements (`li`, `p`, `td`, `th`), deterministic IDs, redaction, pagination, and JSON mode (`mode: 'text' \| 'json'`) | ~400–2,000 tokens |
 | `nomad_action` | Atomic interactions (`click`, `hover`, `type`, `clear`, `press`, `selectOption`, `scroll`, `drag`, `highlight`) with automatic self-healing retry on stale refs | ~40 tokens |
 | `nomad_screenshot` | GPU snapshot; set `labeled: true` for vision badges, or `elementId` / `clip` for cropped region capture | Base64 image |
-| `nomad_evaluate` | Run expression-oriented JavaScript in page context; returns value or descriptive runtime error message | Minimal |
+| `nomad_evaluate` | Run expression-oriented JavaScript in page or isolated context (`world: 'page' | 'isolated'`); returns value or descriptive error | Minimal |
 | `nomad_dialog` | Inspect or configure JavaScript dialog handling (`policy: 'accept' \| 'dismiss'`, optional prompt response text) | ~40 tokens |
 | `nomad_console` | Inspect recent page console logs (`log`, `warn`, `error`) or clear log buffer | ~100 tokens |
 | `nomad_network` | Inspect recent HTTP requests (fetch/XHR), status codes, latencies, and errors | ~150 tokens |
@@ -40,7 +40,7 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 
 ### 1. Navigation & State Verification
 ```json
-// Navigate to page
+// Navigate to page (pass allowLocalFiles: true for file:// URLs)
 nomad_navigate({ "url": "https://example.com" })
 
 // Check status or verify active tab
@@ -95,11 +95,12 @@ Supported action types:
 - `selectOption`: Chooses native HTML `<select>` dropdown option by `optionValue` or `optionText`. For custom ARIA/div dropdowns (e.g. Radix, HeadlessUI, React-Select), click the dropdown trigger element, wait/snapshot, and click the option element.
 - `scroll`: Scrolls the viewport by `scrollDeltaY` pixels (e.g. `300` to scroll down, `-300` to scroll up) or `scrollDeltaX`.
 - `drag`: Dispatches standard HTML5 drag-and-drop sequence (`dragstart`, `dragover`, `drop`, `dragend`) to destination (`toX`, `toY`).
-- `highlight`: Briefly flashes an orange highlight box over the element for visual confirmation.
+- `highlight`: Briefly flashes a high-contrast visual outline over the element for visual confirmation.
 
 > [!NOTE]
 > **JavaScript Evaluation (`nomad_evaluate`):**
 > Evaluates expression-oriented JavaScript in page context. To run multi-statement scripts or declare variables, wrap the code in an IIFE: `(() => { const x = 1; return x + 1; })()`.
+> Pass `world: "isolated"` to execute in an isolated WebKit content world (`.defaultClient`) that bypasses page-level CSP or script interference.
 
 ### 4. Vision Grounding (Multimodal Verification)
 When visual spatial layout is required, capture a vision-grounded screenshot:
