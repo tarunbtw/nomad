@@ -42,22 +42,20 @@ struct OnboardingView: View {
 
                 // Centered Editorial Content
                 VStack(spacing: 28) {
-                    // Stage 1: Hand-Drawn Nomad Mark
+                    // Stage 1: Hand-Drawn Nomad Mark (Clean, transparent brand mark)
                     Group {
                         if let _ = NSImage(named: "NomadMark") {
                             Image("NomadMark")
                                 .resizable()
                                 .interpolation(.high)
                                 .scaledToFit()
-                                .frame(width: 88, height: 88)
-                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                .shadow(color: Color.black.opacity(0.08), radius: 12, x: 0, y: 6)
+                                .frame(width: 96, height: 96)
                         } else {
                             // Fallback glyph if image asset is unavailable
                             Image(systemName: "safari")
                                 .font(.system(size: 52, weight: .light))
                                 .foregroundStyle(settings.accentColor)
-                                .frame(width: 88, height: 88)
+                                .frame(width: 96, height: 96)
                         }
                     }
                     .opacity(appearStage >= 1 ? 1 : 0)
