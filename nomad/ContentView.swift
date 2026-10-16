@@ -10,18 +10,28 @@ import AppKit
 
 struct ContentView: View {
     @StateObject private var store = BrowserStore()
+    @StateObject private var settings = SettingsStore.shared
 
     var body: some View {
-        BrowserView(store: store)
-            .ignoresSafeArea()
-            .frame(minWidth: 640, minHeight: 420)
-            .background(WindowConfigurator())
-            .onAppear {
-                NomadAgentServer.shared.start(store: store)
+        ZStack {
+            BrowserView(store: store)
+                .ignoresSafeArea()
+
+            if !settings.hasCompletedOnboarding {
+                OnboardingView(settings: settings)
+                    .transition(.opacity.combined(with: .scale(scale: 1.01)))
+                    .zIndex(500)
             }
-            .onDisappear {
-                NomadAgentServer.shared.stop()
-            }
+        }
+        .frame(minWidth: 640, minHeight: 420)
+        .background(WindowConfigurator())
+        .preferredColorScheme(settings.colorScheme)
+        .onAppear {
+            NomadAgentServer.shared.start(store: store)
+        }
+        .onDisappear {
+            NomadAgentServer.shared.stop()
+        }
     }
 }
 
@@ -41,6 +51,7 @@ private struct WindowConfigurator: NSViewRepresentable {
             window.isMovableByWindowBackground = false
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
+            SettingsStore.shared.applyTheme()
         }
     }
 }

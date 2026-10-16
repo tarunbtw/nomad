@@ -79,77 +79,57 @@ struct NomadAction: Codable {
     var modifiers: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case action, type
-        case target, elementId, selector
-        case text, key, direction, amount, submit, blur, change, force
-        case x, y, toX, toY
-        case scrollDeltaY, deltaY, scrollDeltaX, deltaX
-        case optionValue, optionText, modifiers
+        case action, type, target, elementId, selector, text, key, direction, amount
+        case submit, blur, change, force, x, y, toX, toY
+        case scrollDeltaY, deltaY, scrollDeltaX, deltaX, optionValue, optionText, modifiers
     }
 
     init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.action = try container.decodeIfPresent(String.self, forKey: .action)
-            ?? container.decodeIfPresent(String.self, forKey: .type)
-            ?? "click"
-        self.target = try container.decodeIfPresent(String.self, forKey: .target)
-            ?? container.decodeIfPresent(String.self, forKey: .elementId)
-            ?? container.decodeIfPresent(String.self, forKey: .selector)
-        self.text = try container.decodeIfPresent(String.self, forKey: .text)
-        self.key = try container.decodeIfPresent(String.self, forKey: .key)
-        self.submit = try container.decodeIfPresent(Bool.self, forKey: .submit)
-        self.blur = try container.decodeIfPresent(Bool.self, forKey: .blur)
-        self.change = try container.decodeIfPresent(Bool.self, forKey: .change)
-        self.force = try container.decodeIfPresent(Bool.self, forKey: .force)
-        self.x = try container.decodeIfPresent(CGFloat.self, forKey: .x)
-        self.y = try container.decodeIfPresent(CGFloat.self, forKey: .y)
-        self.toX = try container.decodeIfPresent(CGFloat.self, forKey: .toX)
-        self.toY = try container.decodeIfPresent(CGFloat.self, forKey: .toY)
-
-        let dy = try container.decodeIfPresent(CGFloat.self, forKey: .scrollDeltaY)
-            ?? container.decodeIfPresent(CGFloat.self, forKey: .deltaY)
-        let dx = try container.decodeIfPresent(CGFloat.self, forKey: .scrollDeltaX)
-            ?? container.decodeIfPresent(CGFloat.self, forKey: .deltaX)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.action = try c.decodeIfPresent(String.self, forKey: .action) ?? c.decodeIfPresent(String.self, forKey: .type) ?? "click"
+        self.target = try c.decodeIfPresent(String.self, forKey: .target) ?? c.decodeIfPresent(String.self, forKey: .elementId) ?? c.decodeIfPresent(String.self, forKey: .selector)
+        self.text = try c.decodeIfPresent(String.self, forKey: .text)
+        self.key = try c.decodeIfPresent(String.self, forKey: .key)
+        self.submit = try c.decodeIfPresent(Bool.self, forKey: .submit)
+        self.blur = try c.decodeIfPresent(Bool.self, forKey: .blur)
+        self.change = try c.decodeIfPresent(Bool.self, forKey: .change)
+        self.force = try c.decodeIfPresent(Bool.self, forKey: .force)
+        self.x = try c.decodeIfPresent(CGFloat.self, forKey: .x)
+        self.y = try c.decodeIfPresent(CGFloat.self, forKey: .y)
+        self.toX = try c.decodeIfPresent(CGFloat.self, forKey: .toX)
+        self.toY = try c.decodeIfPresent(CGFloat.self, forKey: .toY)
+        let dy = try c.decodeIfPresent(CGFloat.self, forKey: .scrollDeltaY) ?? c.decodeIfPresent(CGFloat.self, forKey: .deltaY)
+        let dx = try c.decodeIfPresent(CGFloat.self, forKey: .scrollDeltaX) ?? c.decodeIfPresent(CGFloat.self, forKey: .deltaX)
         self.scrollDeltaY = dy
         self.scrollDeltaX = dx
-
-        if let dyVal = dy {
-            self.amount = abs(dyVal)
-            self.direction = dyVal >= 0 ? "down" : "up"
-        } else if let dxVal = dx {
-            self.amount = abs(dxVal)
-            self.direction = dxVal >= 0 ? "right" : "left"
-        } else {
-            self.direction = try container.decodeIfPresent(String.self, forKey: .direction)
-            self.amount = try container.decodeIfPresent(CGFloat.self, forKey: .amount)
-        }
-
-        self.optionValue = try container.decodeIfPresent(String.self, forKey: .optionValue)
-        self.optionText = try container.decodeIfPresent(String.self, forKey: .optionText)
-        self.modifiers = try container.decodeIfPresent([String].self, forKey: .modifiers)
+        self.amount = dy != nil ? abs(dy!) : (dx != nil ? abs(dx!) : try c.decodeIfPresent(CGFloat.self, forKey: .amount))
+        self.direction = dy != nil ? (dy! >= 0 ? "down" : "up") : (dx != nil ? (dx! >= 0 ? "right" : "left") : try c.decodeIfPresent(String.self, forKey: .direction))
+        self.optionValue = try c.decodeIfPresent(String.self, forKey: .optionValue)
+        self.optionText = try c.decodeIfPresent(String.self, forKey: .optionText)
+        self.modifiers = try c.decodeIfPresent([String].self, forKey: .modifiers)
     }
 
     func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(action, forKey: .action)
-        try container.encodeIfPresent(target, forKey: .target)
-        try container.encodeIfPresent(text, forKey: .text)
-        try container.encodeIfPresent(key, forKey: .key)
-        try container.encodeIfPresent(direction, forKey: .direction)
-        try container.encodeIfPresent(amount, forKey: .amount)
-        try container.encodeIfPresent(submit, forKey: .submit)
-        try container.encodeIfPresent(blur, forKey: .blur)
-        try container.encodeIfPresent(change, forKey: .change)
-        try container.encodeIfPresent(force, forKey: .force)
-        try container.encodeIfPresent(x, forKey: .x)
-        try container.encodeIfPresent(y, forKey: .y)
-        try container.encodeIfPresent(toX, forKey: .toX)
-        try container.encodeIfPresent(toY, forKey: .toY)
-        try container.encodeIfPresent(scrollDeltaY, forKey: .scrollDeltaY)
-        try container.encodeIfPresent(scrollDeltaX, forKey: .scrollDeltaX)
-        try container.encodeIfPresent(optionValue, forKey: .optionValue)
-        try container.encodeIfPresent(optionText, forKey: .optionText)
-        try container.encodeIfPresent(modifiers, forKey: .modifiers)
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(action, forKey: .action)
+        try c.encodeIfPresent(target, forKey: .target)
+        try c.encodeIfPresent(text, forKey: .text)
+        try c.encodeIfPresent(key, forKey: .key)
+        try c.encodeIfPresent(direction, forKey: .direction)
+        try c.encodeIfPresent(amount, forKey: .amount)
+        try c.encodeIfPresent(submit, forKey: .submit)
+        try c.encodeIfPresent(blur, forKey: .blur)
+        try c.encodeIfPresent(change, forKey: .change)
+        try c.encodeIfPresent(force, forKey: .force)
+        try c.encodeIfPresent(x, forKey: .x)
+        try c.encodeIfPresent(y, forKey: .y)
+        try c.encodeIfPresent(toX, forKey: .toX)
+        try c.encodeIfPresent(toY, forKey: .toY)
+        try c.encodeIfPresent(scrollDeltaY, forKey: .scrollDeltaY)
+        try c.encodeIfPresent(scrollDeltaX, forKey: .scrollDeltaX)
+        try c.encodeIfPresent(optionValue, forKey: .optionValue)
+        try c.encodeIfPresent(optionText, forKey: .optionText)
+        try c.encodeIfPresent(modifiers, forKey: .modifiers)
     }
 }
 
@@ -1202,11 +1182,16 @@ extension Tab {
         var targetRect: CGRect? = clip
         if targetRect == nil, let elId = elementId {
             await ensureNomadScriptInjected()
+            let safeElIdData = (try? JSONSerialization.data(withJSONObject: [elId])) ?? Data("[\"\"]".utf8)
+            let safeElIdArray = String(data: safeElIdData, encoding: .utf8) ?? "[\"\"]"
             let rectScript = """
             (function() {
-                var el = window.__nomad && window.__nomad.elements && window.__nomad.elements['\(elId)'];
-                if (!el && window.__nomad && window.__nomad.findInTree) { el = window.__nomad.findInTree(document, '\(elId)'); }
-                if (!el) { el = document.querySelector('[data-nomad-id="\(elId)"]'); }
+                var targetId = (\(safeElIdArray))[0];
+                var el = window.__nomad && window.__nomad.elements && window.__nomad.elements[targetId];
+                if (!el && window.__nomad && window.__nomad.findInTree) { el = window.__nomad.findInTree(document, targetId); }
+                if (!el) {
+                    try { el = document.querySelector('[data-nomad-id="' + CSS.escape(targetId) + '"]'); } catch(e) {}
+                }
                 if (el) {
                     var r = (window.__nomad && window.__nomad.getElementViewportRect) ? window.__nomad.getElementViewportRect(el) : el.getBoundingClientRect();
                     return { x: r.left, y: r.top, width: r.width, height: r.height };

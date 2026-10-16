@@ -55,9 +55,11 @@ final class FaviconService {
             return await existing.value
         }
 
+        let isPrivate = isPrivateOrLocalHost(cleanedHost)
+
         let task = Task<NSImage?, Never> {
-            // Strategy 1: High-res DuckDuckGo favicon API (global CDN, 32x32 ico)
-            if let ddgURL = URL(string: "https://icons.duckduckgo.com/ip3/\(cleanedHost).ico") {
+            // Strategy 1: High-res DuckDuckGo favicon API (global CDN, 32x32 ico) - public domains only
+            if !isPrivate, let ddgURL = URL(string: "https://icons.duckduckgo.com/ip3/\(cleanedHost).ico") {
                 var req = URLRequest(url: ddgURL)
                 req.timeoutInterval = 4
                 if let (data, response) = try? await URLSession.shared.data(for: req),
@@ -67,8 +69,8 @@ final class FaviconService {
                 }
             }
 
-            // Strategy 2: Google Favicon API fallback
-            if let googleURL = URL(string: "https://www.google.com/s2/favicons?domain=\(cleanedHost)&sz=64") {
+            // Strategy 2: Google Favicon API fallback - public domains only
+            if !isPrivate, let googleURL = URL(string: "https://www.google.com/s2/favicons?domain=\(cleanedHost)&sz=64") {
                 var req = URLRequest(url: googleURL)
                 req.timeoutInterval = 4
                 if let (data, response) = try? await URLSession.shared.data(for: req),
@@ -110,5 +112,20 @@ final class FaviconService {
             h.removeFirst(4)
         }
         return h
+    }
+
+    private func isPrivateOrLocalHost(_ host: String) -> Bool {
+        let lower = host.lowercased()
+        if lower == "localhost" || lower == "127.0.0.1" || lower == "::1" { return true }
+        if lower.hasSuffix(".local") || lower.hasSuffix(".internal") || lower.hasSuffix(".lan") || lower.hasSuffix(".home") || lower.hasSuffix(".arpa") { return true }
+        if !lower.contains(".") { return true }
+        if lower.starts(with: "192.168.") || lower.starts(with: "10.") || lower.starts(with: "127.") { return true }
+        if lower.starts(with: "172.") {
+            let parts = lower.split(separator: ".")
+            if parts.count >= 2, let second = Int(parts[1]), (16...31).contains(second) {
+                return true
+            }
+        }
+        return false
     }
 }

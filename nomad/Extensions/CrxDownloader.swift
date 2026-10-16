@@ -39,14 +39,11 @@ enum CrxDownloader {
 
     /// Extract 32-letter Chrome Web Store extension ID (characters a-p).
     static func extractID(from text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let pattern = #"(?<![a-z])([a-p]{32})(?![a-z])"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
-              let match = regex.firstMatch(in: trimmed, options: [], range: NSRange(trimmed.startIndex..., in: trimmed)),
-              let range = Range(match.range(at: 1), in: trimmed) else {
-            return nil
-        }
-        return String(trimmed[range]).lowercased()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let candidate = trimmed.split(whereSeparator: { !$0.isLetter }).first(where: {
+            $0.count == 32 && $0.allSatisfy { $0 >= "a" && $0 <= "p" }
+        }) else { return nil }
+        return String(candidate)
     }
 
     /// Generates a stable 32-character extension ID for an unpacked local folder,

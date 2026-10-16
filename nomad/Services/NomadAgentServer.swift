@@ -40,7 +40,6 @@ final class NomadAgentServer: ObservableObject {
             return true
         }
         let lower = origin.lowercased()
-        if lower == "null" { return true }
         if lower.hasPrefix("http://127.0.0.1") || lower.hasPrefix("https://127.0.0.1") { return true }
         if lower.hasPrefix("http://localhost") || lower.hasPrefix("https://localhost") { return true }
         if lower.hasPrefix("http://[::1]") || lower.hasPrefix("https://[::1]") { return true }
@@ -275,8 +274,6 @@ final class NomadAgentServer: ObservableObject {
                 providedToken = String(authHeader.dropFirst(7)).trimmingCharacters(in: .whitespaces)
             } else if let customHeader = headers["x-nomad-token"] {
                 providedToken = customHeader.trimmingCharacters(in: .whitespaces)
-            } else if let qToken = queryParams["token"] {
-                providedToken = qToken
             }
 
             if let tok = providedToken, Self.constantTimeEquals(tok, self.token) {

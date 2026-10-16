@@ -441,11 +441,55 @@ extension ExtensionManager: WKWebExtensionControllerDelegate {
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, promptForPermissions permissions: Set<WKWebExtension.Permission>, in tab: (any WKWebExtensionTab)?, for extensionContext: WKWebExtensionContext) async -> (Set<WKWebExtension.Permission>, Date?) {
-        return (permissions, nil)
+        let extName = extensionContext.webExtension.displayName ?? extensionContext.uniqueIdentifier
+        let key = "nomad.extension.approved.\(extensionContext.uniqueIdentifier)"
+        if UserDefaults.standard.bool(forKey: key) || permissions.isEmpty {
+            return (permissions, nil)
+        }
+
+        let permList = permissions.map(\.rawValue).joined(separator: ", ")
+        let granted = await MainActor.run { () -> Bool in
+            let alert = NSAlert()
+            alert.messageText = "Allow \"\(extName)\" to access permissions?"
+            alert.informativeText = "This extension is requesting access to:\n\(permList.isEmpty ? "Standard browser APIs" : permList)\n\nDo you want to grant these permissions?"
+            alert.addButton(withTitle: "Allow")
+            alert.addButton(withTitle: "Deny")
+            alert.alertStyle = .informational
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                UserDefaults.standard.set(true, forKey: key)
+                return true
+            }
+            return false
+        }
+
+        return granted ? (permissions, nil) : ([], nil)
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, promptForPermissionMatchPatterns matchPatterns: Set<WKWebExtension.MatchPattern>, in tab: (any WKWebExtensionTab)?, for extensionContext: WKWebExtensionContext) async -> (Set<WKWebExtension.MatchPattern>, Date?) {
-        return (matchPatterns, nil)
+        let extName = extensionContext.webExtension.displayName ?? extensionContext.uniqueIdentifier
+        let key = "nomad.extension.matches.approved.\(extensionContext.uniqueIdentifier)"
+        if UserDefaults.standard.bool(forKey: key) || matchPatterns.isEmpty {
+            return (matchPatterns, nil)
+        }
+
+        let patternList = matchPatterns.map(\.string).prefix(5).joined(separator: "\n")
+        let granted = await MainActor.run { () -> Bool in
+            let alert = NSAlert()
+            alert.messageText = "Allow \"\(extName)\" to access websites?"
+            alert.informativeText = "This extension is requesting permission to read and change data on websites including:\n\(patternList)\(matchPatterns.count > 5 ? "\n...and \(matchPatterns.count - 5) more" : "")\n\nDo you want to grant access?"
+            alert.addButton(withTitle: "Allow")
+            alert.addButton(withTitle: "Deny")
+            alert.alertStyle = .informational
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                UserDefaults.standard.set(true, forKey: key)
+                return true
+            }
+            return false
+        }
+
+        return granted ? (matchPatterns, nil) : ([], nil)
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, didUpdate action: WKWebExtension.Action, forExtensionContext context: WKWebExtensionContext) {

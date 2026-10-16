@@ -90,9 +90,21 @@ enum WebKitPool {
                     }
                 } catch(e) {}
             }
+            function maskNative(fn, name) {
+                try {
+                    Object.defineProperty(fn, 'name', { value: name, configurable: true });
+                    Object.defineProperty(fn, 'toString', {
+                        value: function() { return 'function ' + name + '() { [native code] }'; },
+                        configurable: true
+                    });
+                } catch(e) {}
+            }
             console.log = function(...args) { origLog.apply(console, args); send('log', args); };
             console.warn = function(...args) { origWarn.apply(console, args); send('warn', args); };
             console.error = function(...args) { origError.apply(console, args); send('error', args); };
+            maskNative(console.log, 'log');
+            maskNative(console.warn, 'warn');
+            maskNative(console.error, 'error');
         })();
         """
         ucc.addUserScript(WKUserScript(source: consoleInterceptor, injectionTime: .atDocumentStart, forMainFrameOnly: true))
@@ -102,6 +114,16 @@ enum WebKitPool {
         (function() {
             if (window.__nomad_network_hooked) return;
             window.__nomad_network_hooked = true;
+
+            function maskNative(fn, name) {
+                try {
+                    Object.defineProperty(fn, 'name', { value: name, configurable: true });
+                    Object.defineProperty(fn, 'toString', {
+                        value: function() { return 'function ' + name + '() { [native code] }'; },
+                        configurable: true
+                    });
+                } catch(e) {}
+            }
 
             function sendNet(entry) {
                 try {
@@ -154,6 +176,7 @@ enum WebKitPool {
                         throw err;
                     }
                 };
+                maskNative(window.fetch, 'fetch');
             }
 
             // Hook XMLHttpRequest
@@ -179,6 +202,8 @@ enum WebKitPool {
                 }, { once: true });
                 return origSend.apply(this, args);
             };
+            maskNative(XMLHttpRequest.prototype.open, 'open');
+            maskNative(XMLHttpRequest.prototype.send, 'send');
         })();
         """
         ucc.addUserScript(WKUserScript(source: networkInterceptor, injectionTime: .atDocumentStart, forMainFrameOnly: true))

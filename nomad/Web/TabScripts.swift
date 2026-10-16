@@ -95,11 +95,13 @@ enum TabScripts {
     """
 
     static func highlightElement(selector: String) -> String {
-        let escaped = selector.replacingOccurrences(of: "'", with: "\\'")
+        let safeData = (try? JSONSerialization.data(withJSONObject: [selector])) ?? Data("[\"\"]".utf8)
+        let safeArray = String(data: safeData, encoding: .utf8) ?? "[\"\"]"
         return """
         (function() {
             try {
-                const el = document.querySelector('\(escaped)');
+                const targetSel = (\(safeArray))[0];
+                const el = document.querySelector(targetSel);
                 if (!el) return;
                 el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 const prev = el.style.outline;
@@ -231,17 +233,6 @@ enum TabScripts {
             overlay.style.display = 'none';
             overlay.remove();
         }
-    })();
-    """
-
-    static let unhideZapped = """
-    (function() {
-        const s = document.getElementById('nomad-zapped-rules');
-        if (s) s.remove();
-        document.querySelectorAll('[data-nomad-zapped="true"]').forEach(el => {
-            el.style.removeProperty('display');
-            el.removeAttribute('data-nomad-zapped');
-        });
     })();
     """
 

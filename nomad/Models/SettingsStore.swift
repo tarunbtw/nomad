@@ -146,6 +146,11 @@ final class SettingsStore: ObservableObject {
         didSet { objectWillChange.send() }
     }
 
+    // MARK: - First-Run / Onboarding State
+    @AppStorage("nomad.hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false {
+        didSet { objectWillChange.send() }
+    }
+
     // MARK: - Bookmarks State
     @Published var bookmarks: [Bookmark] = []
 
@@ -158,13 +163,16 @@ final class SettingsStore: ObservableObject {
     }
 
     func applyTheme() {
-        switch theme {
-        case "dark":
-            NSApp.appearance = NSAppearance(named: .darkAqua)
-        case "light":
-            NSApp.appearance = NSAppearance(named: .aqua)
-        default:
-            NSApp.appearance = nil
+        let appAppearance: NSAppearance? = {
+            switch theme {
+            case "dark": return NSAppearance(named: .darkAqua)
+            case "light": return NSAppearance(named: .aqua)
+            default: return nil
+            }
+        }()
+        NSApp.appearance = appAppearance
+        for window in NSApp.windows {
+            window.appearance = appAppearance
         }
     }
 
@@ -370,6 +378,14 @@ extension Color {
         let g = Double((intVal >> 8) & 0xFF) / 255.0
         let b = Double(intVal & 0xFF) / 255.0
         self = Color(.sRGB, red: r, green: g, blue: b, opacity: 1.0)
+    }
+
+    func toHex() -> String? {
+        guard let components = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        let r = Int(round(components.redComponent * 255.0))
+        let g = Int(round(components.greenComponent * 255.0))
+        let b = Int(round(components.blueComponent * 255.0))
+        return String(format: "%02X%02X%02X", r, g, b)
     }
 }
 

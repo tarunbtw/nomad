@@ -65,106 +65,66 @@ struct BrowserView: View {
             }
         }
         .background {
-            // Native keyboard shortcuts
-            Group {
-                Button("") { store.newTab() }
-                    .keyboardShortcut("t", modifiers: .command)
-                Button("") { store.newIncognitoTab() }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
-                Button("") {
-                    if let activeId = store.activeTabId { store.closeTab(id: activeId) }
-                }
-                .keyboardShortcut("w", modifiers: .command)
-                Button("") { store.isAddressBarFocused = true }
-                    .keyboardShortcut("l", modifiers: .command)
-                Button("") { store.reload() }
-                    .keyboardShortcut("r", modifiers: .command)
-                Button("") { store.goBack() }
-                    .keyboardShortcut("[", modifiers: .command)
-                Button("") { store.goForward() }
-                    .keyboardShortcut("]", modifiers: .command)
-                Button("") { store.selectPreviousTab() }
-                    .keyboardShortcut("{", modifiers: .command)
-                Button("") { store.selectNextTab() }
-                    .keyboardShortcut("}", modifiers: .command)
-                Button("") { store.openSettings() }
-                    .keyboardShortcut(",", modifiers: .command)
-                Button("") { store.openSettings(section: "History") }
-                    .keyboardShortcut("y", modifiers: .command)
-                Button("") {
-                    if let tab = store.activeTab,
-                       let urlString = tab.url?.absoluteString,
-                       !tab.isBlank, !tab.isInternalPage, !urlString.isEmpty, urlString != "about:blank" {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            if settings.isBookmarked(urlString) {
-                                settings.removeBookmark(url: urlString)
-                            } else {
-                                let title = tab.title.isEmpty ? (tab.url?.host ?? urlString) : tab.title
-                                settings.addBookmark(title: title, url: urlString)
-                            }
-                        }
-                    }
-                }
-                .keyboardShortcut("d", modifiers: .command)
-                // Browser Page Zoom Shortcuts (⌘+, ⌘-, ⌘0)
-                Button("") { store.activeTab?.zoomIn() }
-                    .keyboardShortcut("+", modifiers: .command)
-                Button("") { store.activeTab?.zoomIn() }
-                    .keyboardShortcut("=", modifiers: .command)
-                Button("") { store.activeTab?.zoomOut() }
-                    .keyboardShortcut("-", modifiers: .command)
-                Button("") { store.activeTab?.resetZoom() }
-                    .keyboardShortcut("0", modifiers: .command)
-                // Find in Page (⌘F)
-                Button("") {
-                    if let tab = store.activeTab, !tab.isInternalPage && !tab.isBlank {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
-                            tab.isFindBarVisible.toggle()
-                        }
-                    }
-                }
-                .keyboardShortcut("f", modifiers: .command)
-                // Print / PDF Export (⌘P)
-                Button("") { store.activeTab?.printPage() }
-                    .keyboardShortcut("p", modifiers: .command)
-                // Developer Tools / Dev Drawer (⌘⌥I)
-                Button("") {
-                    if let tab = store.activeTab, !tab.isInternalPage && !tab.isBlank {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
-                            tab.isDevDrawerVisible.toggle()
-                        }
-                    }
-                }
-                .keyboardShortcut("i", modifiers: [.command, .option])
+            keyboardShortcutBridge
+        }
+    }
 
-                // Command Palette (⌘K)
-                Button("") {
-                    withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
-                        isCommandPaletteVisible.toggle()
-                    }
-                }
-                .keyboardShortcut("k", modifiers: .command)
+    @ViewBuilder
+    private var keyboardShortcutBridge: some View {
+        Group {
+            Button("New Tab") { store.newTab() }.keyboardShortcut("t", modifiers: .command)
+            Button("New Incognito") { store.newIncognitoTab() }.keyboardShortcut("n", modifiers: [.command, .shift])
+            Button("Close Tab") { if let activeId = store.activeTabId { store.closeTab(id: activeId) } }.keyboardShortcut("w", modifiers: .command)
+            Button("Address Bar") { store.isAddressBarFocused = true }.keyboardShortcut("l", modifiers: .command)
+            Button("Reload") { store.reload() }.keyboardShortcut("r", modifiers: .command)
+            Button("Back") { store.goBack() }.keyboardShortcut("[", modifiers: .command)
+            Button("Forward") { store.goForward() }.keyboardShortcut("]", modifiers: .command)
+            Button("Prev Tab") { store.selectPreviousTab() }.keyboardShortcut("{", modifiers: .command)
+            Button("Next Tab") { store.selectNextTab() }.keyboardShortcut("}", modifiers: .command)
+            Button("Settings") { store.openSettings() }.keyboardShortcut(",", modifiers: .command)
+            Button("History") { store.openSettings(section: "History") }.keyboardShortcut("y", modifiers: .command)
+            Button("Bookmark") { toggleBookmark() }.keyboardShortcut("d", modifiers: .command)
+            Button("Zoom In") { store.activeTab?.zoomIn() }.keyboardShortcut("+", modifiers: .command)
+            Button("Zoom In Eq") { store.activeTab?.zoomIn() }.keyboardShortcut("=", modifiers: .command)
+            Button("Zoom Out") { store.activeTab?.zoomOut() }.keyboardShortcut("-", modifiers: .command)
+            Button("Zoom Reset") { store.activeTab?.resetZoom() }.keyboardShortcut("0", modifiers: .command)
+            Button("Find") { toggleFindBar() }.keyboardShortcut("f", modifiers: .command)
+            Button("Print") { store.activeTab?.printPage() }.keyboardShortcut("p", modifiers: .command)
+            Button("Dev Drawer") { toggleDevDrawer() }.keyboardShortcut("i", modifiers: [.command, .option])
+            Button("Command Palette") { withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) { isCommandPaletteVisible.toggle() } }.keyboardShortcut("k", modifiers: .command)
+            Button("Element Zapper") { store.activeTab?.toggleElementZapper() }.keyboardShortcut("h", modifiers: [.command, .shift])
+            Button("Reader Mode") { store.activeTab?.toggleReaderMode() }.keyboardShortcut("r", modifiers: [.command, .shift])
+            Button("Picture in Picture") { store.activeTab?.togglePictureInPicture() }.keyboardShortcut("p", modifiers: [.command, .shift])
+        }
+        .opacity(0)
+        .allowsHitTesting(false)
+    }
 
-                // Element Zapper (⇧⌘H)
-                Button("") {
-                    store.activeTab?.toggleElementZapper()
-                }
-                .keyboardShortcut("h", modifiers: [.command, .shift])
-
-                // Reading Mode (⇧⌘R)
-                Button("") {
-                    store.activeTab?.toggleReaderMode()
-                }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
-
-                // Floating Video / PiP (⇧⌘P)
-                Button("") {
-                    store.activeTab?.togglePictureInPicture()
-                }
-                .keyboardShortcut("p", modifiers: [.command, .shift])
+    private func toggleBookmark() {
+        guard let tab = store.activeTab,
+              let urlString = tab.url?.absoluteString,
+              !tab.isBlank, !tab.isInternalPage, !urlString.isEmpty, urlString != "about:blank" else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if settings.isBookmarked(urlString) {
+                settings.removeBookmark(url: urlString)
+            } else {
+                let title = tab.title.isEmpty ? (tab.url?.host ?? urlString) : tab.title
+                settings.addBookmark(title: title, url: urlString)
             }
-            .opacity(0)
-            .allowsHitTesting(false)
+        }
+    }
+
+    private func toggleFindBar() {
+        guard let tab = store.activeTab, !tab.isInternalPage && !tab.isBlank else { return }
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+            tab.isFindBarVisible.toggle()
+        }
+    }
+
+    private func toggleDevDrawer() {
+        guard let tab = store.activeTab, !tab.isInternalPage && !tab.isBlank else { return }
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+            tab.isDevDrawerVisible.toggle()
         }
     }
 }

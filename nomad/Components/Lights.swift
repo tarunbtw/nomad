@@ -34,9 +34,25 @@ final class Lights: NSObject {
         super.init()
 
         let nc = NotificationCenter.default
-        nc.addObserver(self, selector: #selector(place), name: NSWindow.didResizeNotification, object: window)
-        nc.addObserver(self, selector: #selector(place), name: NSWindow.didExitFullScreenNotification, object: window)
-        nc.addObserver(self, selector: #selector(windowWillClose), name: NSWindow.willCloseNotification, object: window)
+        for name in [
+            NSWindow.didResizeNotification,
+            NSWindow.didEndLiveResizeNotification,
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.didResignKeyNotification,
+            NSWindow.didExitFullScreenNotification,
+            NSWindow.didChangeScreenNotification,
+            NSWindow.willCloseNotification,
+        ] {
+            nc.addObserver(self, selector: #selector(place), name: name, object: window)
+        }
+
+        let buttons = self.buttons
+        if let bar = buttons.first?.superview, let container = bar.superview {
+            for view in [container, bar] + buttons {
+                view.postsFrameChangedNotifications = true
+                nc.addObserver(self, selector: #selector(place), name: NSView.frameDidChangeNotification, object: view)
+            }
+        }
         place()
     }
 
@@ -64,13 +80,25 @@ final class Lights: NSObject {
 
         let height: CGFloat = 50
         var frame = container.frame
-        if frame.height != height || frame.maxY != window.frame.height {
+        if frame.height != height || frame.maxY != window.frame.height || frame.width < 80 {
             frame.size.height = height
+            frame.size.width = max(frame.size.width, 80)
             frame.origin.y = window.frame.height - height
             container.frame = frame
         }
 
+        var barFrame = bar.frame
+        if barFrame.height != height || barFrame.width < 80 {
+            barFrame.size.height = height
+            barFrame.size.width = max(barFrame.size.width, 80)
+            bar.frame = barFrame
+        }
+
+        container.clipsToBounds = false
+        bar.clipsToBounds = false
+
         for (index, button) in buttons.enumerated() {
+            button.isHidden = false
             let size = button.frame.size
             let origin = NSPoint(
                 x: Lights.centre.x - size.width / 2 + CGFloat(index) * spacing,

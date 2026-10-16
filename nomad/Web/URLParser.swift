@@ -69,8 +69,7 @@ enum URLParser {
         // Discard strings with spaces or containing @
         guard !string.contains(" "), !string.contains("@") else { return false }
 
-        let hostPart = string.components(separatedBy: "/").first ?? string
-        let cleanHost = hostPart.components(separatedBy: ":").first ?? hostPart
+        let cleanHost = URL(string: "http://\(string)")?.host ?? string
 
         if isLocalHost(cleanHost) { return true }
 

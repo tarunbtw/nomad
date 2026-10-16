@@ -86,6 +86,7 @@ struct SettingsView: View {
                 ? Color(nsColor: .windowBackgroundColor).opacity(0.4)
                 : Color(nsColor: .windowBackgroundColor)
         )
+        .preferredColorScheme(settings.colorScheme)
         .onAppear {
             hexInputText = settings.customBgHex.replacingOccurrences(of: "#", with: "")
         }
@@ -441,7 +442,29 @@ struct SettingsView: View {
                     Text("Bing").tag("bing")
                 }
                 .pickerStyle(.menu)
-                .frame(maxWidth: 260)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: 320)
+            }
+
+            // Welcome Experience
+            card(title: "Welcome Experience") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Replay Welcome Screen")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("View the first-run introduction screen and core principles.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Replay") {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            settings.hasCompletedOnboarding = false
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
             }
         }
     }

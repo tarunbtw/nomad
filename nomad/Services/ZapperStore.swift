@@ -44,10 +44,11 @@ final class ZapperStore: ObservableObject {
 
     /// Records a newly zapped selector for a specific domain host
     func addSelector(_ selector: String, for host: String) {
-        guard !selector.isEmpty, !host.isEmpty else { return }
+        let clean = selector.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, !host.isEmpty, !clean.contains("\n"), !clean.contains("\r"), clean.count <= 500 else { return }
         var current = zappedByHost[host] ?? []
-        if !current.contains(selector) {
-            current.append(selector)
+        if !current.contains(clean) {
+            current.append(clean)
             zappedByHost[host] = current
             save()
         }

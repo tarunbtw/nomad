@@ -128,15 +128,15 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
         let key = ObjectIdentifier(download)
-        let filename = suggestedFilename.isEmpty ? "download" : suggestedFilename
+        let safeFilename = sanitizeFilename(suggestedFilename)
         
         // Ensure ~/Downloads directory exists
         try? FileManager.default.createDirectory(at: downloadsDirectory, withIntermediateDirectories: true)
         
-        let destination = uniqueDestinationURL(for: filename)
+        let destination = uniqueDestinationURL(for: safeFilename)
         
         if let item = downloadItems[key] {
-            item.suggestedFilename = filename
+            item.suggestedFilename = safeFilename
             item.destinationURL = destination
         }
         
@@ -209,16 +209,30 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
     }
 
 
-    // MARK: - Destination Disambiguation
+    // MARK: - Destination Disambiguation & Sanitization
+
+    private func sanitizeFilename(_ filename: String) -> String {
+        let raw = filename.isEmpty ? "download" : filename
+        var clean = (raw as NSString).lastPathComponent
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "\\", with: "_")
+            .replacingOccurrences(of: "\0", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if clean.isEmpty || clean == "." || clean == ".." || clean.hasPrefix(".") {
+            clean = "download" + (clean.isEmpty ? "" : "_\(clean)")
+        }
+        return clean
+    }
 
     private func uniqueDestinationURL(for filename: String) -> URL {
-        let base = downloadsDirectory.appendingPathComponent(filename)
+        let safeName = sanitizeFilename(filename)
+        let base = downloadsDirectory.appendingPathComponent(safeName)
         if !FileManager.default.fileExists(atPath: base.path) {
             return base
         }
 
-        let name = (filename as NSString).deletingPathExtension
-        let ext = (filename as NSString).pathExtension
+        let name = (safeName as NSString).deletingPathExtension
+        let ext = (safeName as NSString).pathExtension
         var counter = 1
         
         while true {

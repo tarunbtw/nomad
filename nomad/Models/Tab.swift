@@ -486,7 +486,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     func unhideAllZappedElements() {
         guard let host = url?.host ?? webView.url?.host else { return }
         ZapperStore.shared.clearSelectors(for: host)
-        webView.evaluateJavaScript(TabScripts.unhideZapped, completionHandler: nil)
+        webView.evaluateJavaScript("document.getElementById('nomad-zapped-rules')?.remove()", completionHandler: nil)
     }
 
     // MARK: - Reading Mode (⇧⌘R)
@@ -697,7 +697,7 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
         if let targetURL = navigationAction.request.url {
             let scheme = targetURL.scheme?.lowercased() ?? ""
             // Disallow untrusted remote web pages from navigating to local file URLs or internal nomad schemes
-            if let currentURL = webView.url, currentURL.scheme != "nomad" && (scheme == "nomad" || scheme == "file") {
+            if (scheme == "nomad" || scheme == "file") && webView.url?.scheme != "nomad" {
                 decisionHandler(.cancel, preferences)
                 return
             }
@@ -793,16 +793,18 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
             // Apply persistently zapped elements for this domain
             if let host = currentURL.host {
                 let css = ZapperStore.shared.cssRule(for: host)
-                if !css.isEmpty {
+                if !css.isEmpty,
+                   let cssData = try? JSONSerialization.data(withJSONObject: [css]),
+                   let jsonArray = String(data: cssData, encoding: .utf8) {
                     let injectScript = """
                     (function() {
                         let s = document.getElementById('nomad-zapped-rules');
                         if (!s) {
                             s = document.createElement('style');
                             s.id = 'nomad-zapped-rules';
-                            document.head ? document.head.appendChild(s) : document.documentElement.appendChild(s);
+                            (document.head || document.documentElement).appendChild(s);
                         }
-                        s.textContent = `\(css)`;
+                        s.textContent = (\(jsonArray))[0];
                     })();
                     """
                     webView.evaluateJavaScript(injectScript, completionHandler: nil)
