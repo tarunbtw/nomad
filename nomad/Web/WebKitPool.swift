@@ -34,8 +34,8 @@ enum WebKitPool {
         
         // Developer extras for Web Inspector
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        // Throttle inactive and background tabs to stop CPU waste and heat
-        config.preferences.inactiveSchedulingPolicy = .throttle
+        // Do not throttle background tabs so agent automation, timers, and mutations run at full speed
+        config.preferences.inactiveSchedulingPolicy = .none
         // Enable HTML5 video fullscreen expansion
         config.preferences.isElementFullscreenEnabled = true
         // Automatically upgrade known hosts to HTTPS

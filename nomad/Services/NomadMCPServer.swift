@@ -181,7 +181,7 @@ final class NomadMCPServer {
             callNomad(method: "POST", path: "/action", body: args) { res, err in
                 if let dict = res as? [String: Any],
                    dict["success"] as? Bool == false,
-                   let elId = args["elementId"] as? String,
+                   (args["elementId"] as? String != nil || args["target"] as? String != nil || args["selector"] as? String != nil),
                    (args["_retried"] as? Bool) != true {
                     // Self-healing retry: refresh snapshot and try once more
                     callNomad(method: "GET", path: "/snapshot") { _, _ in
@@ -211,6 +211,7 @@ final class NomadMCPServer {
             let action = (args["action"] as? String)?.lowercased() ?? "get"
             var qs: [String] = []
             if let ad = args["allDomains"] as? Bool, ad { qs.append("allDomains=true") }
+            if let dom = args["domain"] as? String, !dom.isEmpty { qs.append("domain=\(dom.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? dom)") }
             if let tid = args["tabId"] as? String { qs.append("tabId=\(tid.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tid)") }
             let qsStr = qs.isEmpty ? "" : "?" + qs.joined(separator: "&")
 

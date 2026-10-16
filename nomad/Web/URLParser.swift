@@ -50,6 +50,11 @@ enum URLParser {
             if let url = URL(string: trimmed) { return url }
         }
 
+        // Direct local filesystem file paths
+        if trimmed.hasPrefix("/") && FileManager.default.fileExists(atPath: trimmed) {
+            return URL(fileURLWithPath: trimmed)
+        }
+
         // Check if text looks like a host or IP (e.g. "github.com", "localhost:3000", "127.0.0.1")
         if looksLikeHost(trimmed) {
             let scheme = trimmed.isLocalOrPrivateHost ? "http://" : "https://"

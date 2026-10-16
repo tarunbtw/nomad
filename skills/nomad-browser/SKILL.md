@@ -141,7 +141,40 @@ Nomad's embedded local server (`127.0.0.1:9222`) is protected by bearer token au
   TOKEN=$(cat ~/.nomad/agent-token)
   curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9222/snapshot
   ```
-- **Liveness:** `GET /status` is unauthenticated for zero-friction liveness probes and capability checks.
+- **Health & Liveness Probes:** `GET /status` returns `{ "nomad": "active", "version": "1.0", "port": 9222, "authRequired": true }` unauthenticated. When authenticated with your Bearer token, it returns full engine status: `tabsCount`, `tabCount`, `activeTabId`, `activeURL`, `activeUrl`, `activeTitle`, `capabilities`, and `lastDialog`.
+
+---
+
+## Direct HTTP REST API Reference (`127.0.0.1:9222`)
+
+For environments driving Nomad directly without MCP (e.g. `curl`, Python, Node.js scripts), authenticate with `Authorization: Bearer <token>` or `X-Nomad-Token: <token>`.
+
+| Method | Endpoint | Description / Parameters |
+| :--- | :--- | :--- |
+| `GET` | `/status` | Engine health, capabilities, tab counts (`tabsCount`, `tabCount`), active URL (`activeURL`, `activeUrl`) |
+| `GET` | `/tabs` | List open tabs (`id`, `title`, `url`, `active`, `isActive`, `isLoading`, `isIncognito`) |
+| `POST` | `/tabs/new` | Body: `{ "url"?: string, "select"?: bool, "isIncognito"?: bool }` |
+| `POST` | `/tabs/switch` | Body: `{ "id": string }` |
+| `POST` | `/tabs/close` | Body: `{ "id": string }` |
+| `POST` | `/navigate` | Body: `{ "url"?: string, "action"?: "url"|"back"|"forward"|"reload", "allowLocalFiles"?: bool }` (for `file://` URLs, pass `allowLocalFiles: true`; concurrent navigations automatically cancel superseded loads) |
+| `POST` | `/navigate/back` | Navigate back in browser history |
+| `POST` | `/navigate/forward`| Navigate forward in browser history |
+| `POST` | `/navigate/reload` | Reload active page |
+| `GET` | `/snapshot` | Query: `limit`, `offset`, `viewportOnly=true`, `includeText=true`, `tabId` |
+| `POST` | `/action` | Body: `{ "type": "click"|"hover"|"type"|"clear"|"press"|"selectOption"|"scroll"|"drag"|"highlight"` (alias: `action`), `"elementId"?: string`, `"selector"?: string`, ... } |
+| `POST` | `/wait` | Body: `{ "mode": "stability"|"selector"|"url"|"timeout"|"networkidle"|"navigation", "selector"?: string, "urlPattern"?: string` (supports regex or plain substring), `"quietMs"?: int, "timeoutMs"?: int }` |
+| `GET` | `/cookies` | Query: `domain` (filter by target domain), `allDomains=true`, `tabId` |
+| `POST` | `/cookies` | Body: `{ "action": "set"|"get"|"clear", "domain"?: string, "name"?: string, "value"?: string, "cookies"?: [...], "allDomains"?: bool }` |
+| `DELETE` | `/cookies` | Query / Body: `domain` (clears cookies for domain), `allDomains=true` (clears all profile cookies) |
+| `GET` / `POST` | `/screenshot` | Query / Body: `labeled=true`, `elementId=eN`, `clip=x,y,w,h` |
+| `POST` | `/evaluate` | Body: `{ "script": string }` (alias: `expression`), `world`: `"page"` \| `"isolated"` |
+| `POST` | `/dialog` | Body: `{ "policy": "accept"|"dismiss", "response": string }` (alias: `promptResponse`) |
+| `GET` | `/console` | Query: `level=all|log|warn|error`, `clear=true`, `tabId` |
+| `GET` | `/network` | Query: `statusFilter=all|errors|success`, `clear=true`, `tabId` |
+
+> [!CAUTION]
+> **Profile Cookies & State Isolation:**
+> Nomad runs against your live profile sessions. Passing `allDomains: true` to `/cookies` inspects or clears cookies across all domains in the profile. For isolated automated testing without affecting personal logins, open tabs with `"isIncognito": true`.
 
 ---
 

@@ -86,7 +86,14 @@ struct NomadAction: Codable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.action = try c.decodeIfPresent(String.self, forKey: .action) ?? c.decodeIfPresent(String.self, forKey: .type) ?? "click"
+        guard let rawAction = (try c.decodeIfPresent(String.self, forKey: .action) ?? c.decodeIfPresent(String.self, forKey: .type))?.trimmingCharacters(in: .whitespacesAndNewlines), !rawAction.isEmpty else {
+            throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Missing required 'type' or 'action' field in action object"))
+        }
+        let validActions: Set<String> = ["click", "hover", "type", "clear", "press", "selectoption", "scroll", "drag", "highlight"]
+        guard validActions.contains(rawAction.lowercased()) else {
+            throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Unknown action type '\(rawAction)'"))
+        }
+        self.action = rawAction
         self.target = try c.decodeIfPresent(String.self, forKey: .target) ?? c.decodeIfPresent(String.self, forKey: .elementId) ?? c.decodeIfPresent(String.self, forKey: .selector)
         self.text = try c.decodeIfPresent(String.self, forKey: .text)
         self.key = try c.decodeIfPresent(String.self, forKey: .key)
@@ -138,9 +145,19 @@ struct NomadAction: Codable {
 struct NomadActionResult: Codable {
     let success: Bool
     let message: String
-    let elementId: String?
-    let obscured: Bool?
-    let interceptedBy: String?
+    var elementId: String? = nil
+    var obscured: Bool? = nil
+    var interceptedBy: String? = nil
+    var healed: Bool? = nil
+
+    init(success: Bool, message: String, elementId: String? = nil, obscured: Bool? = nil, interceptedBy: String? = nil, healed: Bool? = nil) {
+        self.success = success
+        self.message = message
+        self.elementId = elementId
+        self.obscured = obscured
+        self.interceptedBy = interceptedBy
+        self.healed = healed
+    }
 }
 
 // MARK: - In-Page Perception & Action Engine (JavaScript Core)
@@ -233,6 +250,7 @@ enum NomadDOMScript {
                 var includeText = options.includeText !== undefined ? Boolean(options.includeText) : true;
 
                 if (!this.elements) this.elements = {};
+                if (!this.elementSignatures) this.elementSignatures = {};
                 for (var oldId in this.elements) {
                     if (!this.isNodeConnected(this.elements[oldId])) {
                         delete this.elements[oldId];
@@ -445,6 +463,20 @@ enum NomadDOMScript {
                         try { el.setAttribute('data-nomad-id', id); } catch(e) {}
                     }
                     this.elements[id] = el;
+                    this.elementSignatures[id] = {
+                        tag: tag,
+                        id: el.id || null,
+                        name: el.getAttribute('name') || null,
+                        type: type,
+                        role: role,
+                        className: (el.className && typeof el.className === 'string') ? el.className.trim() : null,
+                        text: text,
+                        value: val,
+                        placeholder: el.placeholder || null,
+                        ariaLabel: el.getAttribute('aria-label') || null,
+                        testId: el.getAttribute('data-testid') || null,
+                        ordinal: i
+                    };
 
                     // In-viewport check (top/bottom/left/right relative to viewport)
                     var inViewport = (rect.bottom >= 0 && rect.top <= vpH && rect.right >= 0 && rect.left <= vpW);
@@ -594,11 +626,129 @@ enum NomadDOMScript {
                 };
             },
 
+            // Resolves a replacement node for a stale reference when DOM changes occurred without intermediate snapshot
+            selfHealElement: function(targetId) {
+                if (!targetId) return null;
+                var oldEl = (this.elements && this.elements[targetId]) || null;
+                var sig = (this.elementSignatures && this.elementSignatures[targetId]) || null;
+
+                var tag = (sig && sig.tag) || (oldEl && oldEl.tagName && oldEl.tagName.toLowerCase()) || null;
+                var domId = (sig && sig.id) || (oldEl && oldEl.id) || null;
+                var name = (sig && sig.name) || (oldEl && oldEl.getAttribute && oldEl.getAttribute('name')) || null;
+                var testId = (sig && sig.testId) || (oldEl && oldEl.getAttribute && oldEl.getAttribute('data-testid')) || null;
+                var ariaLabel = (sig && sig.ariaLabel) || (oldEl && oldEl.getAttribute && oldEl.getAttribute('aria-label')) || null;
+                var text = (sig && sig.text) || (oldEl && (oldEl.innerText || oldEl.textContent || '').trim().replace(/\\s+/g, ' ')) || null;
+                var placeholder = (sig && sig.placeholder) || (oldEl && oldEl.placeholder) || null;
+                var type = (sig && sig.type) || (oldEl && oldEl.getAttribute && oldEl.getAttribute('type')) || null;
+                var role = (sig && sig.role) || (oldEl && oldEl.getAttribute && oldEl.getAttribute('role')) || null;
+                var className = (sig && sig.className) || (oldEl && oldEl.className && typeof oldEl.className === 'string' ? oldEl.className.trim() : null);
+
+                // Fast path 1: query by element ID
+                if (domId) {
+                    try {
+                        var byId = document.getElementById(domId);
+                        if (byId && this.isNodeConnected(byId)) return byId;
+                    } catch(e) {}
+                }
+                // Fast path 2: query by data-testid
+                if (testId) {
+                    try {
+                        var byTest = document.querySelector('[data-testid="' + CSS.escape(testId) + '"]');
+                        if (byTest && this.isNodeConnected(byTest)) return byTest;
+                    } catch(e) {}
+                }
+                // Fast path 3: query by name and tag
+                if (name && tag) {
+                    try {
+                        var byName = document.querySelectorAll(tag + '[name="' + CSS.escape(name) + '"]');
+                        for (var ni = 0; ni < byName.length; ni++) {
+                            if (this.isNodeConnected(byName[ni])) return byName[ni];
+                        }
+                    } catch(e) {}
+                }
+                // Fast path 4: query by aria-label and tag
+                if (ariaLabel && tag) {
+                    try {
+                        var byAria = document.querySelectorAll(tag + '[aria-label="' + CSS.escape(ariaLabel) + '"]');
+                        for (var ai = 0; ai < byAria.length; ai++) {
+                            if (this.isNodeConnected(byAria[ai])) return byAria[ai];
+                        }
+                    } catch(e) {}
+                }
+
+                // Scored search across candidates in the live document
+                var selector = tag || 'a, button, input, textarea, select, details, summary, [role="button"], [role="link"], [contenteditable="true"]';
+                var candidates = [];
+                try {
+                    var found = document.querySelectorAll(selector);
+                    for (var ci = 0; ci < found.length; ci++) {
+                        var cand = found[ci];
+                        if (this.isNodeConnected(cand)) candidates.push(cand);
+                    }
+                } catch(e) {}
+
+                var bestEl = null;
+                var bestScore = -1;
+
+                for (var k = 0; k < candidates.length; k++) {
+                    var c = candidates[k];
+                    var score = 0;
+                    var cTag = c.tagName.toLowerCase();
+                    if (tag && cTag === tag) score += 20;
+                    if (domId && c.id === domId) score += 50;
+                    if (name && c.getAttribute('name') === name) score += 35;
+                    if (testId && c.getAttribute('data-testid') === testId) score += 50;
+                    if (type && c.getAttribute('type') === type) score += 20;
+                    if (role && c.getAttribute('role') === role) score += 20;
+                    if (placeholder && c.placeholder === placeholder) score += 25;
+                    if (ariaLabel && c.getAttribute('aria-label') === ariaLabel) score += 30;
+
+                    var cText = (c.innerText || c.textContent || '').trim().replace(/\\s+/g, ' ');
+                    if (text && cText === text) {
+                        score += 40;
+                    } else if (text && cText && (cText.indexOf(text) !== -1 || text.indexOf(cText) !== -1)) {
+                        score += 20;
+                    }
+
+                    if (className && c.className && typeof c.className === 'string') {
+                        if (c.className.trim() === className) score += 15;
+                        else if (c.className.indexOf(className) !== -1) score += 10;
+                    }
+
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestEl = c;
+                    }
+                }
+
+                if (bestScore >= 35 && bestEl) {
+                    return bestEl;
+                }
+
+                // Fallback: positional healing for eN references
+                if (typeof targetId === 'string' && /^e\\d+$/i.test(targetId)) {
+                    var n = parseInt(targetId.substring(1), 10);
+                    if (!isNaN(n) && n > 0 && n <= candidates.length) {
+                        var posCand = candidates[n - 1];
+                        if (posCand && (!tag || posCand.tagName.toLowerCase() === tag)) {
+                            return posCand;
+                        }
+                    }
+                }
+
+                return null;
+            },
+
             // 2. Dispatches synthetic and realistic user actions
             performAction: function(actionObj) {
-                var action = actionObj.action || actionObj.type || '';
+                var action = (actionObj.action || actionObj.type || '').trim().toLowerCase();
                 var targetId = actionObj.target || actionObj.elementId || actionObj.selector;
                 var el = null;
+                var wasHealed = false;
+
+                if (!action) {
+                    return { success: false, message: "Missing required 'type' or 'action' field" };
+                }
 
                 if (targetId) {
                     if (this.elements && this.elements[targetId] && this.isNodeConnected(this.elements[targetId])) {
@@ -607,17 +757,31 @@ enum NomadDOMScript {
                         el = this.findInTree(document, targetId);
                         if (el && this.elements) this.elements[targetId] = el;
                     }
-                } else if (action === 'type' || action === 'clear') {
-                    if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.isContentEditable)) {
-                        el = document.activeElement;
+
+                    // In-place self-healing for stale node references
+                    if (!el && this.selfHealElement) {
+                        var healed = this.selfHealElement(targetId);
+                        if (healed) {
+                            el = healed;
+                            wasHealed = true;
+                            if (!this.elements) this.elements = {};
+                            this.elements[targetId] = el;
+                            try { el.setAttribute('data-nomad-id', targetId); } catch(e) {}
+                        }
                     }
+                }
+
+                var targetRequiredActions = ['type', 'clear', 'selectoption', 'drag', 'highlight'];
+                if (targetRequiredActions.indexOf(action) !== -1 && !targetId) {
+                    return { success: false, message: 'No target element specified for ' + action + ' action' };
                 }
 
                 if (targetId && !el && action !== 'scroll' && action !== 'press') {
                     return { success: false, message: 'Target element ' + targetId + ' not found or no longer in DOM.', elementId: targetId };
                 }
 
-                switch (action) {
+                var actionOutcome = (function(self) {
+                    switch (action) {
                     case 'click':
                         if (el) {
                             if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
@@ -695,7 +859,7 @@ enum NomadDOMScript {
                             }
                             return { success: false, message: 'No element at coordinates (' + actionObj.x + ', ' + actionObj.y + ')' };
                         }
-                        return { success: false, message: 'No target specified for click' };
+                        return { success: false, message: 'No target element or coordinates specified for click action' };
 
                     case 'hover':
                         if (!el) return { success: false, message: 'No target element for hover action' };
@@ -775,7 +939,7 @@ enum NomadDOMScript {
                                 el.dispatchEvent(cEnterDown);
                                 el.dispatchEvent(cEnterUp);
                             }
-                            return { success: true, message: 'Typed into ' + targetId, elementId: targetId };
+                            return { success: true, message: 'Typed into ' + (targetId || 'element'), elementId: targetId };
                         }
                         try {
                             // React 16+ controlled component compatibility
@@ -805,7 +969,7 @@ enum NomadDOMScript {
                                 } catch(e) {}
                             }
                         }
-                        return { success: true, message: 'Typed into ' + targetId, elementId: targetId };
+                        return { success: true, message: 'Typed into ' + (targetId || 'element'), elementId: targetId };
 
                     case 'drag':
                         if (!el) return { success: false, message: 'No source element for drag action' };
@@ -895,6 +1059,7 @@ enum NomadDOMScript {
                         }
                         return { success: true, message: 'Pressed key ' + rawKey };
 
+                    case 'selectoption':
                     case 'selectOption':
                         if (!el || el.tagName !== 'SELECT') {
                             return { success: false, message: 'Target ' + targetId + ' is not a <select> element' };
@@ -941,19 +1106,43 @@ enum NomadDOMScript {
                             else if (dir === 'left') dx = -amt;
                         }
 
+                        var prevScrollY = window.scrollY || window.pageYOffset || 0;
+                        var prevScrollX = window.scrollX || window.pageXOffset || 0;
                         window.scrollBy({ left: dx, top: dy, behavior: 'instant' });
-                        var desc = dy !== 0 ? (dy > 0 ? 'down by ' + dy + 'px' : 'up by ' + Math.abs(dy) + 'px') : (dx > 0 ? 'right by ' + dx + 'px' : 'left by ' + Math.abs(dx) + 'px');
+                        var actualDy = Math.round((window.scrollY || window.pageYOffset || 0) - prevScrollY);
+                        var actualDx = Math.round((window.scrollX || window.pageXOffset || 0) - prevScrollX);
+
+                        var desc = '';
+                        if (actualDy !== 0) {
+                            desc = actualDy > 0 ? 'down by ' + actualDy + 'px' : 'up by ' + Math.abs(actualDy) + 'px';
+                            if (dy !== 0 && Math.abs(actualDy) < Math.abs(dy)) {
+                                desc += ' (clamped from requested ' + Math.abs(dy) + 'px)';
+                            }
+                        } else if (actualDx !== 0) {
+                            desc = actualDx > 0 ? 'right by ' + actualDx + 'px' : 'left by ' + Math.abs(actualDx) + 'px';
+                            if (dx !== 0 && Math.abs(actualDx) < Math.abs(dx)) {
+                                desc += ' (clamped from requested ' + Math.abs(dx) + 'px)';
+                            }
+                        } else {
+                            desc = '0px (already at boundary)';
+                        }
                         return { success: true, message: 'Scrolled ' + desc };
 
                     case 'highlight':
                         if (!el) return { success: false, message: 'No target element to highlight' };
-                        this.showHighlight(el);
+                        self.showHighlight(el);
                         return { success: true, message: 'Highlighted ' + targetId, elementId: targetId };
 
                     default:
                         return { success: false, message: 'Unknown action: ' + action };
                 }
-            },
+            })(this);
+
+            if (actionOutcome && actionOutcome.success && wasHealed) {
+                actionOutcome.healed = true;
+            }
+            return actionOutcome;
+        },
 
             // 3. Visual Element Highlighter for DevX & Inspection
             showHighlight: function(el) {
@@ -1015,40 +1204,47 @@ enum NomadDOMScript {
                 return new Promise(function(resolve) {
                     var quiet = quietMs || 250;
                     var maxWait = timeoutMs || 5000;
-                    var timer = null;
-                    var observer = null;
+                    var lastMutationTime = performance.now();
                     var mutationCount = 0;
+                    var intervalTimer = null;
+                    var maxTimer = null;
                     var resolved = false;
+                    var observer = null;
+                    var recentMutationTimes = [];
+
+                    function recordMutation(count) {
+                        var t = performance.now();
+                        lastMutationTime = t;
+                        mutationCount += count;
+                        recentMutationTimes.push(t);
+                        if (recentMutationTimes.length > 20) {
+                            recentMutationTimes.shift();
+                        }
+                    }
 
                     function done(res) {
                         if (resolved) return;
                         resolved = true;
                         if (maxTimer) clearTimeout(maxTimer);
-                        if (timer) clearTimeout(timer);
+                        if (intervalTimer) clearInterval(intervalTimer);
                         if (observer) {
                             try { observer.disconnect(); } catch(e) {}
+                            observer = null;
                         }
                         resolve(res);
                     }
 
-                    var maxTimer = setTimeout(function() {
-                        done({ success: false, reason: 'timeout', message: 'Exceeded max wait of ' + maxWait + 'ms (' + mutationCount + ' mutations)' });
+                    maxTimer = setTimeout(function() {
+                        done({ success: false, reason: 'timeout', message: 'Exceeded max wait of ' + maxWait + 'ms (' + mutationCount + ' mutations observed)', mutations: mutationCount });
                     }, maxWait);
-
-                    function resetTimer() {
-                        if (resolved) return;
-                        if (timer) clearTimeout(timer);
-                        timer = setTimeout(function() {
-                            done({ success: true, message: 'DOM stabilized for ' + quiet + 'ms (' + mutationCount + ' mutations observed)', mutations: mutationCount });
-                        }, quiet);
-                    }
 
                     try {
                         observer = new MutationObserver(function(mutations) {
-                            mutationCount += (mutations ? mutations.length : 1);
-                            resetTimer();
+                            var added = (mutations ? mutations.length : 1);
+                            recordMutation(added);
                         });
-                        observer.observe(document.documentElement || document.body, {
+                        var targetNode = document.documentElement || document;
+                        observer.observe(targetNode, {
                             childList: true,
                             subtree: true,
                             attributes: true,
@@ -1056,7 +1252,49 @@ enum NomadDOMScript {
                         });
                     } catch(e) {}
 
-                    resetTimer();
+                    intervalTimer = setInterval(function() {
+                        if (resolved) return;
+                        if (observer) {
+                            try {
+                                var records = observer.takeRecords();
+                                if (records && records.length > 0) {
+                                    recordMutation(records.length);
+                                }
+                            } catch(e) {}
+                        }
+                        var now = performance.now();
+                        var isReady = (document.readyState === 'complete' || document.readyState === 'interactive');
+
+                        // Dynamic cadence detection: if recurring periodic mutations occur (e.g. 50ms churn with timer jitter),
+                        // require silence that strictly exceeds the observed interval cadence to avoid false-settling mid-churn.
+                        var requiredQuiet = quiet;
+                        if (recentMutationTimes.length >= 3) {
+                            var intervals = [];
+                            for (var k = 1; k < recentMutationTimes.length; k++) {
+                                var diff = recentMutationTimes[k] - recentMutationTimes[k - 1];
+                                if (diff > 10 && diff <= 800) {
+                                    intervals.push(diff);
+                                }
+                            }
+                            if (intervals.length >= 2) {
+                                var sum = 0;
+                                var maxInt = 0;
+                                for (var m = 0; m < intervals.length; m++) {
+                                    sum += intervals[m];
+                                    if (intervals[m] > maxInt) maxInt = intervals[m];
+                                }
+                                var avgInt = sum / intervals.length;
+                                var dynamicFloor = Math.max(Math.round(avgInt * 2.5), Math.round(maxInt * 1.8));
+                                if (dynamicFloor > requiredQuiet) {
+                                    requiredQuiet = dynamicFloor;
+                                }
+                            }
+                        }
+
+                        if (isReady && (now - lastMutationTime) >= requiredQuiet) {
+                            done({ success: true, message: 'DOM stabilized for ' + quiet + 'ms (' + mutationCount + ' mutations observed)', mutations: mutationCount });
+                        }
+                    }, 25);
                 });
             }
         };
@@ -1099,6 +1337,15 @@ extension Tab {
     /// Dispatches a browser action (click, hover, type, clear, scroll, keypress, select, highlight) on the active page.
     @MainActor
     func performAction(_ action: NomadAction) async throws -> NomadActionResult {
+        if webView.isLoading {
+            let start = Date()
+            while webView.isLoading && Date().timeIntervalSince(start) < 0.4 {
+                try? await Task.sleep(nanoseconds: 30_000_000)
+            }
+            if webView.isLoading {
+                return NomadActionResult(success: false, message: "Cannot execute action '\(action.action)': active page is currently navigating. Wait for navigation to complete before dispatching actions.", elementId: action.target)
+            }
+        }
         await ensureNomadScriptInjected()
         let actionData = try JSONEncoder().encode(action)
         guard let actionJSON = String(data: actionData, encoding: .utf8) else {
@@ -1116,8 +1363,18 @@ extension Tab {
     func waitForStability(quietMs: Int = 250, timeoutMs: Int = 5000) async throws -> [String: Any] {
         let start = Date()
         let timeoutSeconds = Double(timeoutMs) / 1000.0
+        // 1. Wait for webView provisional or active navigation to complete
         while webView.isLoading && Date().timeIntervalSince(start) < timeoutSeconds {
             try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        }
+
+        // 2. Wait for HTML document to finish parsing
+        while Date().timeIntervalSince(start) < timeoutSeconds {
+            let readyState = (try? await webView.evaluateJavaScript("document.readyState")) as? String
+            if readyState != "loading" {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
         }
         let elapsed = Int(Date().timeIntervalSince(start) * 1000.0)
         let remainingTimeout = max(50, timeoutMs - elapsed)
@@ -1126,10 +1383,12 @@ extension Tab {
         }
         await ensureNomadScriptInjected()
         let script = """
-        if (!window.__nomad || !window.__nomad.waitForStability) {
-            return { success: true, message: 'DOM ready' };
-        }
-        return await window.__nomad.waitForStability(quietMs, timeoutMs);
+        return await (async () => {
+            if (!window.__nomad || !window.__nomad.waitForStability) {
+                return { success: false, reason: "not_ready", message: "Nomad agent perception script not initialized" };
+            }
+            return await window.__nomad.waitForStability(quietMs, timeoutMs);
+        })();
         """
         return try await withThrowingTaskGroup(of: [String: Any].self) { group in
             group.addTask { @MainActor in
@@ -1145,7 +1404,7 @@ extension Tab {
                         case .failure(let error):
                             let nsErr = error as NSError
                             if nsErr.domain == "WKErrorDomain" && nsErr.code == 4 { // WKErrorJavaScriptExceptionOccurred during page navigation
-                                continuation.resume(returning: ["success": true, "message": "Document navigated"])
+                                continuation.resume(returning: ["success": false, "reason": "navigation_occurred", "message": "Document navigated during wait for stability"])
                             } else {
                                 continuation.resume(throwing: error)
                             }
@@ -1154,7 +1413,7 @@ extension Tab {
                 }
             }
             group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(remainingTimeout + 300) * 1_000_000)
+                try await Task.sleep(nanoseconds: UInt64(remainingTimeout + 800) * 1_000_000)
                 return ["success": false, "reason": "timeout", "message": "Exceeded max wait of \(timeoutMs)ms"]
             }
             let firstResult = try await group.next()!

@@ -141,6 +141,8 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     @Published var lastDialog: String? = nil
     @Published var dialogPolicy: String = "accept"
     @Published var dialogPromptResponse: String = ""
+    @Published var navigationSeq: Int = 0
+    var allowNextFileNavigation: Bool = false
     
     /// The retained custom web view for this tab.
     private(set) var webView: BrowserWebView
@@ -184,6 +186,9 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         webView.pageZoom = 1.0
         if #available(macOS 13.3, *) {
             webView.isInspectable = true
+        }
+        if #available(macOS 14.0, *) {
+            webView.configuration.preferences.inactiveSchedulingPolicy = .none
         }
         self.webView = webView
         
@@ -283,6 +288,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
 
     /// Loads a specific URL.
     func load(url: URL) {
+        self.navigationSeq += 1
         self.url = url
         self.lastNavigationError = nil
         if url.scheme == "nomad" {
@@ -305,7 +311,40 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         webView.setMagnification(1.0, centeredAt: .zero)
         webView.evaluateJavaScript("window.scrollTo(0, 0)", completionHandler: nil)
         if url.isFileURL {
-            webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+            self.allowNextFileNavigation = true
+            let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
+            let ext = resolved.pathExtension.lowercased()
+            let isWebDocument = ["html", "htm", "xhtml", "svg", "pdf"].contains(ext)
+            let readDir = resolved.pathComponents.count > 2 ? resolved.deletingLastPathComponent() : URL(fileURLWithPath: "/")
+            self.url = resolved
+            if isWebDocument {
+                webView.loadFileURL(resolved, allowingReadAccessTo: readDir)
+            } else {
+                if let data = try? Data(contentsOf: resolved) {
+                    let mimeType: String
+                    switch ext {
+                    case "txt", "log", "md", "markdown", "swift", "js", "ts", "py", "sh", "rb", "c", "cpp", "h", "m", "":
+                        mimeType = "text/plain"
+                    case "json":
+                        mimeType = "application/json"
+                    case "xml":
+                        mimeType = "application/xml"
+                    case "png":
+                        mimeType = "image/png"
+                    case "jpg", "jpeg":
+                        mimeType = "image/jpeg"
+                    case "gif":
+                        mimeType = "image/gif"
+                    case "webp":
+                        mimeType = "image/webp"
+                    default:
+                        mimeType = "text/plain"
+                    }
+                    webView.load(data, mimeType: mimeType, characterEncodingName: "utf-8", baseURL: resolved)
+                } else {
+                    webView.loadFileURL(resolved, allowingReadAccessTo: readDir)
+                }
+            }
         } else {
             let request = URLRequest(url: url)
             webView.load(request)
@@ -696,8 +735,17 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
         // Security scheme validation
         if let targetURL = navigationAction.request.url {
             let scheme = targetURL.scheme?.lowercased() ?? ""
-            // Disallow untrusted remote web pages from navigating to local file URLs or internal nomad schemes
-            if (scheme == "nomad" || scheme == "file") && webView.url?.scheme != "nomad" {
+            if scheme == "file" {
+                // Allow file:// if explicitly initiated by app/agent via load(url:), or already browsing local files
+                if allowNextFileNavigation || webView.url == nil || webView.url?.absoluteString == "about:blank" || webView.url?.isFileURL == true {
+                    decisionHandler(.allow, preferences)
+                    return
+                } else {
+                    // Disallow untrusted remote web pages from navigating to local file URLs
+                    decisionHandler(.cancel, preferences)
+                    return
+                }
+            } else if scheme == "nomad" && webView.url?.scheme != "nomad" {
                 decisionHandler(.cancel, preferences)
                 return
             }
@@ -778,6 +826,7 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        self.allowNextFileNavigation = false
         self.isLoading = false
         if webView.magnification != 1.0 {
             webView.setMagnification(1.0, centeredAt: .zero)
@@ -835,14 +884,28 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        self.allowNextFileNavigation = false
         self.isLoading = false
-        self.lastNavigationError = error.localizedDescription
+        let nsErr = error as NSError
+        if !(nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled) {
+            self.lastNavigationError = error.localizedDescription
+        }
         print("Tab Navigation failed: \(error.localizedDescription)")
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        let nsErr = error as NSError
+        // Fallback for file:// URLs that WebKit rejects via loadFileURL (e.g. extensionless, custom format, or WebKitErrorCannotShowURL Code=300)
+        if let currentURL = self.url, currentURL.isFileURL, self.allowNextFileNavigation, let data = try? Data(contentsOf: currentURL) {
+            print("Tab Provisional navigation failed on file URL with \(error.localizedDescription), falling back to data load")
+            self.webView.load(data, mimeType: "text/plain", characterEncodingName: "utf-8", baseURL: currentURL)
+            return
+        }
+        self.allowNextFileNavigation = false
         self.isLoading = false
-        self.lastNavigationError = error.localizedDescription
+        if !(nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled) {
+            self.lastNavigationError = error.localizedDescription
+        }
         print("Tab Provisional navigation failed: \(error.localizedDescription)")
     }
 

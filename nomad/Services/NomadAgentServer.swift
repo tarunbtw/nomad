@@ -59,6 +59,14 @@ final class NomadAgentServer: ObservableObject {
     private var listener: NWListener?
     nonisolated private let serverQueue = DispatchQueue(label: "nomad.agent.server", qos: .userInitiated)
 
+    /// Process activity assertion to ensure macOS App Nap and timer coalescing are disabled during agent server operations
+    private var activityToken: NSObjectProtocol? = {
+        ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled],
+            reason: "Nomad Agent Server Automation"
+        )
+    }()
+
     private init() {}
 
     /// Loads an existing agent token from ~/.nomad/agent-token or generates a new cryptographically secure token.
@@ -307,9 +315,17 @@ final class NomadAgentServer: ObservableObject {
             return store.activeTab
         }
 
-        func requireTab(id: String? = nil, errorMessage: String = "No active tab") -> Tab? {
+        func requireTab(id: String? = nil, errorMessage: String? = nil) -> Tab? {
             guard let tab = resolveTab(id: id) else {
-                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"\(errorMessage)\"}", origin: origin)
+                let msg: String
+                if let errorMessage = errorMessage {
+                    msg = errorMessage
+                } else if let id = id, !id.isEmpty {
+                    msg = "Tab not found with id '\(id)'"
+                } else {
+                    msg = "No active tab"
+                }
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"\(msg)\"}", origin: origin)
                 return nil
             }
             return tab
@@ -339,6 +355,35 @@ final class NomadAgentServer: ObservableObject {
             }
         }
 
+        func executeClearCookies(tab: Tab, targetDomain: String?, allDomains: Bool) async {
+            let cookieStore = tab.webView.configuration.websiteDataStore.httpCookieStore
+            let host = (targetDomain?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? tab.url?.host ?? ""
+            var deletedCount = 0
+
+            if allDomains {
+                let all = await cookieStore.allCookies()
+                deletedCount = all.count
+                for c in all {
+                    await cookieStore.deleteCookie(c)
+                }
+                await tab.webView.configuration.websiteDataStore.removeData(ofTypes: [WKWebsiteDataTypeCookies], modifiedSince: .distantPast)
+                sendJSON(connection: connection, object: ["success": true, "deletedCount": deletedCount, "allDomains": true], origin: origin)
+                return
+            }
+
+            let allCookies = await cookieStore.allCookies()
+            let cleanHost = host.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            for cookie in allCookies {
+                let cleanDomain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                let matches = cleanHost.isEmpty || cleanDomain == cleanHost || cleanHost.hasSuffix("." + cleanDomain) || cleanDomain.hasSuffix("." + cleanHost)
+                if matches {
+                    await cookieStore.deleteCookie(cookie)
+                    deletedCount += 1
+                }
+            }
+            sendJSON(connection: connection, object: ["success": true, "deletedCount": deletedCount, "domain": host], origin: origin)
+        }
+
         switch (method, path) {
         case ("GET", "/"), ("GET", "/status"):
             let capabilities: [String: Any] = [
@@ -356,8 +401,10 @@ final class NomadAgentServer: ObservableObject {
                 "version": "1.0",
                 "port": self.port,
                 "tabsCount": store.tabs.count,
+                "tabCount": store.tabs.count,
                 "activeTabId": store.activeTabId?.uuidString ?? "",
                 "activeURL": store.activeTab?.url?.absoluteString ?? "",
+                "activeUrl": store.activeTab?.url?.absoluteString ?? "",
                 "activeTitle": store.activeTab?.title ?? "",
                 "lastDialog": (store.activeTab?.lastDialog as Any?) ?? NSNull(),
                 "capabilities": capabilities
@@ -365,15 +412,16 @@ final class NomadAgentServer: ObservableObject {
             sendJSON(connection: connection, object: statusObj, origin: origin)
 
         case ("GET", "/tabs"):
-            let tabsList = store.tabs.map { tab in
+            let tabsList: [[String: Any]] = store.tabs.map { tab -> [String: Any] in
                 [
                     "id": tab.id.uuidString,
                     "title": tab.title,
                     "url": tab.url?.absoluteString ?? "",
                     "isIncognito": tab.isIncognito,
                     "isActive": tab.id == store.activeTabId,
+                    "active": tab.id == store.activeTabId,
                     "isLoading": tab.isLoading
-                ] as [String: Any]
+                ]
             }
             sendJSON(connection: connection, object: ["tabs": tabsList], origin: origin)
 
@@ -431,9 +479,12 @@ final class NomadAgentServer: ObservableObject {
 
         case ("POST", "/navigate"):
             guard let activeTab = requireTab() else { return }
-            guard let bodyData = bodyData,
-                  let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
+            guard let bodyData = bodyData, !bodyData.isEmpty else {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing body in /navigate\"}", origin: origin)
+                return
+            }
+            guard let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in request body\"}", origin: origin)
                 return
             }
             let action = (json["action"] as? String)?.lowercased()
@@ -455,16 +506,37 @@ final class NomadAgentServer: ObservableObject {
                         sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"file:// URLs are disabled by default. Pass allowLocalFiles: true to navigate local files.\"}", origin: origin)
                         return
                     }
-                    let pathLower = url.path.lowercased()
+                    let filePath = url.path
+                    if !FileManager.default.fileExists(atPath: filePath) {
+                        sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"File not found at path '\(filePath)'\",\"success\":false}", origin: origin)
+                        return
+                    }
+                    let pathLower = filePath.lowercased()
                     if pathLower.contains("/.ssh") || pathLower.contains("/.nomad") || pathLower.contains("/library/keychains") || pathLower.contains("/etc/master.passwd") || pathLower.contains("/etc/sudoers") {
                         sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"Access to sensitive directory or credential file is blocked by Nomad security policy.\"}", origin: origin)
                         return
                     }
                 }
+                let mySeq = activeTab.navigationSeq + 1
                 activeTab.load(url: url)
-                // Brief pause to detect immediate provisional failure (e.g. invalid host / DNS resolution failure)
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                if let navError = activeTab.lastNavigationError {
+                // Poll briefly (up to 350ms) to ensure provisional navigation starts or early DNS/host error is reported
+                var navError: String? = nil
+                var superseded = false
+                let navStart = Date()
+                while Date().timeIntervalSince(navStart) < 0.35 {
+                    try? await Task.sleep(nanoseconds: 30_000_000)
+                    if activeTab.navigationSeq != mySeq {
+                        superseded = true
+                        break
+                    }
+                    if let err = activeTab.lastNavigationError {
+                        navError = err
+                        break
+                    }
+                }
+                if superseded {
+                    sendJSON(connection: connection, object: ["success": false, "cancelled": true, "reason": "superseded", "navigatedTo": url.absoluteString], origin: origin)
+                } else if let navError = navError {
                     sendJSON(connection: connection, object: ["success": false, "error": navError, "navigatedTo": url.absoluteString], origin: origin)
                 } else {
                     sendJSON(connection: connection, object: ["success": true, "navigatedTo": url.absoluteString], origin: origin)
@@ -527,68 +599,48 @@ final class NomadAgentServer: ObservableObject {
                     sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing selector string\"}", origin: origin)
                     return
                 }
-                await activeTab.ensureNomadScriptInjected()
-                let script = """
-                return await new Promise(function(resolve) {
-                    var sel = selector;
-                    function checkNode() {
-                        if (window.__nomad && window.__nomad.findInTree) {
-                            var f = window.__nomad.findInTree(document, sel);
-                            if (f) return f;
-                        }
+                let startTime = Date()
+                let maxDuration = Double(timeoutMs) / 1000.0
+
+                let escapedSelector: String
+                if let data = try? JSONEncoder().encode(selector), let str = String(data: data, encoding: .utf8) {
+                    escapedSelector = str
+                } else {
+                    escapedSelector = "\"\(selector)\""
+                }
+
+                let checkScript = """
+                (() => {
+                    var sel = \(escapedSelector);
+                    if (window.__nomad && window.__nomad.findInTree) {
                         try {
-                            return document.querySelector(sel);
-                        } catch(e) {
-                            return null;
-                        }
+                            if (window.__nomad.findInTree(document, sel)) return true;
+                        } catch(e) {}
                     }
-                    if (checkNode()) {
-                        resolve({ success: true, message: 'Element already present' });
-                        return;
-                    }
-                    var timer = null;
-                    var pollTimer = null;
-                    var obs = null;
-                    function cleanup() {
-                        if (timer) clearTimeout(timer);
-                        if (pollTimer) clearInterval(pollTimer);
-                        if (obs) obs.disconnect();
-                    }
-                    timer = setTimeout(function() {
-                        cleanup();
-                        resolve({ success: false, message: 'Timeout waiting for ' + sel });
-                    }, timeoutMs);
-                    obs = new MutationObserver(function() {
-                        if (checkNode()) {
-                            cleanup();
-                            resolve({ success: true, message: 'Element appeared' });
-                        }
-                    });
                     try {
-                        obs.observe(document.documentElement || document.body, { childList: true, subtree: true, attributes: true });
-                    } catch(e) {}
-                    pollTimer = setInterval(function() {
-                        if (checkNode()) {
-                            cleanup();
-                            resolve({ success: true, message: 'Element appeared' });
-                        }
-                    }, 50);
-                });
+                        return Boolean(document.querySelector(sel));
+                    } catch(e) {
+                        return false;
+                    }
+                })()
                 """
-                do {
-                    let result: [String: Any] = try await withCheckedThrowingContinuation { continuation in
-                        activeTab.webView.callAsyncJavaScript(script, arguments: ["selector": selector, "timeoutMs": timeoutMs], in: nil, in: .page) { res in
-                            switch res {
-                            case .success(let val):
-                                continuation.resume(returning: (val as? [String: Any]) ?? ["success": true, "selector": selector])
-                            case .failure(let err):
-                                continuation.resume(throwing: err)
-                            }
+
+                var found = false
+                while Date().timeIntervalSince(startTime) < maxDuration {
+                    if !activeTab.isLoading {
+                        let res = (try? await activeTab.webView.evaluateJavaScript(checkScript)) as? Bool ?? false
+                        if res {
+                            found = true
+                            break
                         }
                     }
-                    sendJSON(connection: connection, object: result, origin: origin)
-                } catch {
-                    sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}", origin: origin)
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+
+                if found {
+                    sendJSON(connection: connection, object: ["success": true, "selector": selector, "message": "Element appeared"], origin: origin)
+                } else {
+                    sendJSON(connection: connection, object: ["success": false, "reason": "timeout", "message": "Timeout waiting for selector '\(selector)'"], origin: origin)
                 }
 
             case "networkidle", "network_idle":
@@ -610,12 +662,21 @@ final class NomadAgentServer: ObservableObject {
 
             case "navigation", "url":
                 let expectedPattern = !urlPattern.isEmpty ? urlPattern : selector
+                let regex = !expectedPattern.isEmpty ? try? NSRegularExpression(pattern: expectedPattern, options: .caseInsensitive) : nil
                 let startTime = Date()
                 while Date().timeIntervalSince(startTime) < (Double(timeoutMs) / 1000.0) {
                     try? await Task.sleep(nanoseconds: 50_000_000)
                     let curUrl = activeTab.url?.absoluteString ?? ""
                     if !expectedPattern.isEmpty {
-                        if curUrl.contains(expectedPattern) && !activeTab.isLoading {
+                        let matchesSubstring = curUrl.contains(expectedPattern)
+                        let matchesRegex: Bool
+                        if let regex = regex {
+                            let range = NSRange(curUrl.startIndex..., in: curUrl)
+                            matchesRegex = regex.firstMatch(in: curUrl, options: [], range: range) != nil
+                        } else {
+                            matchesRegex = false
+                        }
+                        if (matchesSubstring || matchesRegex) && !activeTab.isLoading {
                             sendJSON(connection: connection, object: ["success": true, "message": "Navigated to \(curUrl)", "url": curUrl], origin: origin)
                             return
                         }
@@ -638,11 +699,14 @@ final class NomadAgentServer: ObservableObject {
             guard let activeTab = requireTab() else { return }
             let cookieStore = activeTab.webView.configuration.websiteDataStore.httpCookieStore
             let allCookies = await cookieStore.allCookies()
-            let host = activeTab.url?.host ?? ""
+            let domainParam = queryItem("domain")?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let host = (domainParam != nil && !domainParam!.isEmpty) ? domainParam! : (activeTab.url?.host ?? "")
             let allDomains = queryBool("allDomains")
+            let cleanHost = host.trimmingCharacters(in: CharacterSet(charactersIn: "."))
             let matched = allCookies.filter { cookie in
                 if allDomains { return true }
-                return host.isEmpty || cookie.domain.contains(host) || host.contains(cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")))
+                let cleanDomain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                return cleanHost.isEmpty || cleanDomain == cleanHost || cleanHost.hasSuffix("." + cleanDomain) || cleanDomain.hasSuffix("." + cleanHost)
             }.map { cookie -> [String: Any] in
                 var dict: [String: Any] = [
                     "name": cookie.name,
@@ -661,19 +725,65 @@ final class NomadAgentServer: ObservableObject {
 
         case ("POST", "/cookies"):
             guard let activeTab = requireTab() else { return }
-            guard let bodyData = bodyData,
-                  let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
+            guard let bodyData = bodyData, !bodyData.isEmpty else {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing cookie JSON body\"}", origin: origin)
                 return
             }
+            guard let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in cookie request body\"}", origin: origin)
+                return
+            }
+
+            let action = (json["action"] as? String)?.lowercased()
+            let allDomains = queryBool("allDomains") || (json["allDomains"] as? Bool == true)
+            let domainParam = (json["domain"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? queryItem("domain")?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let targetDomain = (domainParam != nil && !domainParam!.isEmpty) ? domainParam! : (activeTab.url?.host ?? "")
+
+            if action == "clear" || action == "delete" {
+                await executeClearCookies(tab: activeTab, targetDomain: targetDomain, allDomains: allDomains)
+                return
+            }
+
+            if action == "get" {
+                let cookieStore = activeTab.webView.configuration.websiteDataStore.httpCookieStore
+                let allCookies = await cookieStore.allCookies()
+                let cleanHost = targetDomain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                let matched = allCookies.filter { cookie in
+                    if allDomains { return true }
+                    let cleanDomain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                    return cleanHost.isEmpty || cleanDomain == cleanHost || cleanHost.hasSuffix("." + cleanDomain) || cleanDomain.hasSuffix("." + cleanHost)
+                }.map { cookie -> [String: Any] in
+                    var dict: [String: Any] = [
+                        "name": cookie.name,
+                        "value": cookie.value,
+                        "domain": cookie.domain,
+                        "path": cookie.path,
+                        "isSecure": cookie.isSecure,
+                        "isHTTPOnly": cookie.isHTTPOnly
+                    ]
+                    if let exp = cookie.expiresDate {
+                        dict["expires"] = exp.timeIntervalSince1970
+                    }
+                    return dict
+                }
+                sendJSON(connection: connection, object: ["cookies": matched, "domain": targetDomain, "allDomains": allDomains], origin: origin)
+                return
+            }
+
+            // Otherwise, default to "set"
             let cookieStore = activeTab.webView.configuration.websiteDataStore.httpCookieStore
-            let host = activeTab.url?.host ?? "localhost"
+            let host = (targetDomain.isEmpty ? "localhost" : targetDomain)
 
             var cookiesToSet: [[String: Any]] = []
             if let list = json["cookies"] as? [[String: Any]] {
                 cookiesToSet = list
             } else if json["name"] != nil && json["value"] != nil {
                 cookiesToSet = [json]
+            }
+
+            if cookiesToSet.isEmpty {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"No cookie definition provided to set (expected 'name' and 'value' or 'cookies' array)\"}", origin: origin)
+                return
             }
 
             var setCount = 0
@@ -705,18 +815,18 @@ final class NomadAgentServer: ObservableObject {
 
         case ("DELETE", "/cookies"):
             guard let activeTab = requireTab() else { return }
-            let cookieStore = activeTab.webView.configuration.websiteDataStore.httpCookieStore
-            let allCookies = await cookieStore.allCookies()
-            let host = activeTab.url?.host ?? ""
-            let allDomains = queryBool("allDomains")
-            var deletedCount = 0
-            for cookie in allCookies {
-                if allDomains || host.isEmpty || cookie.domain.contains(host) || host.contains(cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))) {
-                    await cookieStore.deleteCookie(cookie)
-                    deletedCount += 1
+            var allDomains = queryBool("allDomains")
+            var targetDomain = queryItem("domain")?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let bodyData = bodyData, !bodyData.isEmpty,
+               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
+                if let bAll = json["allDomains"] as? Bool {
+                    allDomains = allDomains || bAll
+                }
+                if let d = json["domain"] as? String, !d.isEmpty {
+                    targetDomain = d.trimmingCharacters(in: .whitespacesAndNewlines)
                 }
             }
-            sendJSON(connection: connection, object: ["success": true, "deletedCount": deletedCount], origin: origin)
+            await executeClearCookies(tab: activeTab, targetDomain: targetDomain, allDomains: allDomains)
 
         case ("GET", "/snapshot"):
             guard let activeTab = requireTab(id: queryItem("tabId")) else { return }
@@ -741,18 +851,22 @@ final class NomadAgentServer: ObservableObject {
 
         case ("POST", "/dialog"):
             guard let activeTab = requireTab() else { return }
-            if let bodyData = bodyData,
-               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
+            if let bodyData = bodyData, !bodyData.isEmpty {
+                guard let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in dialog body\"}", origin: origin)
+                    return
+                }
                 if let policy = json["policy"] as? String {
                     activeTab.dialogPolicy = policy
                 }
-                if let response = json["response"] as? String {
+                if let response = (json["response"] as? String) ?? (json["promptResponse"] as? String) {
                     activeTab.dialogPromptResponse = response
                 }
             }
             sendJSON(connection: connection, object: [
                 "success": true,
                 "policy": activeTab.dialogPolicy,
+                "response": activeTab.dialogPromptResponse,
                 "promptResponse": activeTab.dialogPromptResponse,
                 "lastDialog": (activeTab.lastDialog as Any?) ?? NSNull()
             ], origin: origin)
@@ -764,20 +878,38 @@ final class NomadAgentServer: ObservableObject {
             var clipRect: CGRect? = nil
             if let clipStr = queryItem("clip") {
                 let parts = clipStr.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-                if parts.count == 4 {
-                    clipRect = CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
+                guard parts.count == 4, parts[2] > 0, parts[3] > 0, !parts[0].isNaN, !parts[1].isNaN, !parts[2].isNaN, !parts[3].isNaN else {
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid clip parameter. Expected 4 positive numbers x,y,width,height\",\"success\":false}", origin: origin)
+                    return
                 }
+                clipRect = CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
             }
-            if let bodyData = bodyData,
-               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
+            if let bodyData = bodyData, !bodyData.isEmpty {
+                guard let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in screenshot body\",\"success\":false}", origin: origin)
+                    return
+                }
                 if let labeledBool = json["labeled"] as? Bool { isLabeled = labeledBool }
                 if let elId = json["elementId"] as? String { elementId = elId }
-                if let clipDict = json["clip"] as? [String: Any],
-                   let x = (clipDict["x"] as? NSNumber)?.doubleValue,
-                   let y = (clipDict["y"] as? NSNumber)?.doubleValue,
-                   let w = (clipDict["width"] as? NSNumber)?.doubleValue,
-                   let h = (clipDict["height"] as? NSNumber)?.doubleValue {
-                    clipRect = CGRect(x: x, y: y, width: w, height: h)
+                if let clipRaw = json["clip"] {
+                    if let clipDict = clipRaw as? [String: Any],
+                       let x = (clipDict["x"] as? NSNumber)?.doubleValue,
+                       let y = (clipDict["y"] as? NSNumber)?.doubleValue,
+                       let w = (clipDict["width"] as? NSNumber)?.doubleValue,
+                       let h = (clipDict["height"] as? NSNumber)?.doubleValue,
+                       w > 0, h > 0, !x.isNaN, !y.isNaN, !w.isNaN, !h.isNaN {
+                        clipRect = CGRect(x: x, y: y, width: w, height: h)
+                    } else if let clipStr = clipRaw as? String {
+                        let parts = clipStr.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+                        guard parts.count == 4, parts[2] > 0, parts[3] > 0, !parts[0].isNaN, !parts[1].isNaN, !parts[2].isNaN, !parts[3].isNaN else {
+                            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid clip string in body. Expected x,y,width,height with positive dimensions\",\"success\":false}", origin: origin)
+                            return
+                        }
+                        clipRect = CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
+                    } else {
+                        sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid clip object. Expected {x, y, width > 0, height > 0}\",\"success\":false}", origin: origin)
+                        return
+                    }
                 }
             }
             do {
@@ -792,11 +924,15 @@ final class NomadAgentServer: ObservableObject {
             }
 
         case ("POST", "/action"):
-            guard let bodyData = bodyData else {
+            guard let bodyData = bodyData, !bodyData.isEmpty else {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing action body\"}", origin: origin)
                 return
             }
-            let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any]
+            let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any]
+            if json == nil {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in action body\"}", origin: origin)
+                return
+            }
             let tid = json?["tabId"] as? String
             guard let activeTab = requireTab(id: tid) else { return }
             do {
@@ -804,15 +940,36 @@ final class NomadAgentServer: ObservableObject {
                 let result = try await activeTab.performAction(action)
                 let resData = try JSONEncoder().encode(result)
                 sendRaw(connection: connection, contentType: "application/json; charset=utf-8", data: resData, origin: origin)
+            } catch let decodingError as DecodingError {
+                let msg: String
+                switch decodingError {
+                case .dataCorrupted(let ctx):
+                    msg = ctx.debugDescription
+                case .keyNotFound(let key, _):
+                    msg = "Missing required key '\(key.stringValue)'"
+                case .typeMismatch(_, let ctx):
+                    msg = ctx.debugDescription
+                case .valueNotFound(_, let ctx):
+                    msg = ctx.debugDescription
+                @unknown default:
+                    msg = decodingError.localizedDescription
+                }
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(msg)\",\"success\":false}", origin: origin)
             } catch {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(error.localizedDescription)\"}", origin: origin)
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(error.localizedDescription)\",\"success\":false}", origin: origin)
             }
 
         case ("POST", "/evaluate"):
-            guard let bodyData = bodyData,
-                  let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any],
-                  let script = json["script"] as? String else {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing script string in body\"}", origin: origin)
+            guard let bodyData = bodyData, !bodyData.isEmpty else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing body in /evaluate\"}", origin: origin)
+                return
+            }
+            guard let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in evaluate body\"}", origin: origin)
+                return
+            }
+            guard let script = (json["script"] as? String) ?? (json["expression"] as? String) else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing script or expression string in body\"}", origin: origin)
                 return
             }
             let tid = json["tabId"] as? String
