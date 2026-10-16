@@ -131,15 +131,31 @@ This renders numbered visual badges matching the snapshot references (`[1]`, `[2
 
 ---
 
+## Authentication & Security
+
+Nomad's embedded local server (`127.0.0.1:9222`) is protected by bearer token authentication:
+- **Token Location:** Automatically generated on launch at `~/.nomad/agent-token` with strict POSIX `0600` permissions (only accessible to the current user).
+- **Native MCP Auto-Auth:** When launched via `nomad --mcp`, the native Swift MCP server automatically reads `~/.nomad/agent-token` (or the `NOMAD_TOKEN` environment variable) and authenticates all tool calls to the running browser.
+- **Direct HTTP Calls:** If communicating with the server directly (e.g. via `curl` or custom scripts), pass the token in the `Authorization` or `X-Nomad-Token` header:
+  ```bash
+  TOKEN=$(cat ~/.nomad/agent-token)
+  curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9222/snapshot
+  ```
+- **Liveness:** `GET /status` is unauthenticated for zero-friction liveness probes and capability checks.
+
+---
+
 ## MCP Configuration for Agent Runtimes
+
+Nomad includes a 100% native Swift Model Context Protocol (MCP) server directly inside the app bundle. It communicates over stdio using JSON-RPC 2.0 with zero external dependencies (no Node.js or npm required).
 
 ### Claude Code (`~/.claude/desktop_config.json` or project config)
 ```json
 {
   "mcpServers": {
     "nomad": {
-      "command": "node",
-      "args": ["/Users/tarun/projects/nomad/mcp/nomad-mcp.js"]
+      "command": "/Applications/Nomad.app/Contents/MacOS/nomad",
+      "args": ["--mcp"]
     }
   }
 }
@@ -150,9 +166,12 @@ This renders numbered visual badges matching the snapshot references (`[1]`, `[2
 {
   "mcpServers": {
     "nomad-browser": {
-      "command": "node",
-      "args": ["/Users/tarun/projects/nomad/mcp/nomad-mcp.js"]
+      "command": "/Applications/Nomad.app/Contents/MacOS/nomad",
+      "args": ["--mcp"]
     }
   }
 }
 ```
+
+> [!TIP]
+> If you have symlinked Nomad to your PATH (`sudo ln -s /Applications/Nomad.app/Contents/MacOS/nomad /usr/local/bin/nomad`), you can simply specify `"command": "nomad"`.

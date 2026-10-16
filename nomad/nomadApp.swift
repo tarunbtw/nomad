@@ -11,6 +11,13 @@ import SwiftUI
 struct nomadApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    init() {
+        if CommandLine.arguments.contains("--mcp") || CommandLine.arguments.contains("mcp") {
+            NomadMCPServer.run()
+            exit(0)
+        }
+    }
+
     var body: some Scene {
         Window("Nomad", id: "main") {
             ContentView()
