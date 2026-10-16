@@ -156,13 +156,7 @@ struct TabItemView: View {
             }
             lastClickTime = now
         }
-        .background {
-            if isEditing {
-                ClickOutsideDetector {
-                    cancelEdit()
-                }
-            }
-        }
+
         .overlay(alignment: .topLeading) {
             if isEditing && !editText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 OmniboxSuggestionsView(query: editText, width: min(max(tabWidth, 280), 380)) { selectedURL in
@@ -175,6 +169,11 @@ struct TabItemView: View {
         }
         .onChange(of: isActive) { _, active in
             if !active && isEditing {
+                cancelEdit()
+            }
+        }
+        .onChange(of: isFieldFocused) { _, focused in
+            if !focused && isEditing {
                 cancelEdit()
             }
         }
@@ -270,7 +269,7 @@ struct TabItemView: View {
         let trimmed = editText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             let parsed = URLParser.parse(trimmed)
-            if parsed.scheme == "nomad" && (parsed.host == "settings" || parsed.host == "tune") {
+            if parsed.scheme == "nomad" && parsed.host == "settings" {
                 store.openSettings()
             } else {
                 tab.load(text: trimmed)
@@ -281,61 +280,5 @@ struct TabItemView: View {
 
     private func cancelEdit() {
         isEditing = false
-    }
-}
-
-/// AppKit view that monitors window mouse down events to detect clicks outside its bounds.
-private struct ClickOutsideDetector: NSViewRepresentable {
-    let onOutsideClick: () -> Void
-
-    func makeNSView(context: Context) -> ClickOutsideHostView {
-        let view = ClickOutsideHostView()
-        view.onOutsideClick = onOutsideClick
-        return view
-    }
-
-    func updateNSView(_ nsView: ClickOutsideHostView, context: Context) {
-        nsView.onOutsideClick = onOutsideClick
-    }
-}
-
-private final class ClickOutsideHostView: NSView {
-    var onOutsideClick: (() -> Void)?
-    private var eventMonitor: Any?
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window != nil {
-            startMonitoring()
-        } else {
-            stopMonitoring()
-        }
-    }
-
-    private func startMonitoring() {
-        guard eventMonitor == nil else { return }
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
-            guard let self = self, let window = self.window, event.window === window else {
-                return event
-            }
-            let locationInView = self.convert(event.locationInWindow, from: nil)
-            if !self.bounds.contains(locationInView) {
-                DispatchQueue.main.async {
-                    self.onOutsideClick?()
-                }
-            }
-            return event
-        }
-    }
-
-    private func stopMonitoring() {
-        if let eventMonitor = eventMonitor {
-            NSEvent.removeMonitor(eventMonitor)
-            self.eventMonitor = nil
-        }
-    }
-
-    deinit {
-        stopMonitoring()
     }
 }

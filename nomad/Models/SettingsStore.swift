@@ -193,6 +193,15 @@ final class SettingsStore: ObservableObject {
         Color(hex: customBgHex)
     }
 
+    var searchEngineName: String {
+        switch searchEngine {
+        case "google": return "Google"
+        case "kagi": return "Kagi"
+        case "bing": return "Bing"
+        default: return "DuckDuckGo"
+        }
+    }
+
     var searchEngineBaseURL: String {
         switch searchEngine {
         case "google": return "https://www.google.com/search?q="

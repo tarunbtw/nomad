@@ -49,7 +49,7 @@ final class BrowserStore: ObservableObject {
         }
 
         // Prevent opening duplicate settings tabs: switch to existing settings tab if present
-        if let targetURL = url, targetURL.scheme == "nomad", targetURL.host == "settings" || targetURL.host == "tune" {
+        if let targetURL = url, targetURL.scheme == "nomad", targetURL.host == "settings" {
             if let existingSettings = tabs.first(where: { $0.isInternalPage || $0.url?.scheme == "nomad" || $0.url?.host == "settings" }) {
                 if select {
                     selectTab(id: existingSettings.id)
@@ -197,15 +197,25 @@ final class BrowserStore: ObservableObject {
         }
     }
 
-    /// Opens or switches to the General settings section (legacy tune forwarder).
-    func openTune() {
-        openSettings(section: "General")
+    /// Toggles bookmark state for the specified tab (defaults to active tab).
+    func toggleBookmark(for targetTab: Tab? = nil) {
+        guard let tab = targetTab ?? activeTab,
+              let urlString = tab.url?.absoluteString,
+              !tab.isBlank, !tab.isInternalPage, !urlString.isEmpty, urlString != "about:blank" else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if SettingsStore.shared.isBookmarked(urlString) {
+                SettingsStore.shared.removeBookmark(url: urlString)
+            } else {
+                let title = tab.title.isEmpty ? (tab.url?.host ?? urlString) : tab.title
+                SettingsStore.shared.addBookmark(title: title, url: urlString)
+            }
+        }
     }
 
     /// Opens a bookmark in the current or new tab.
     func openBookmark(_ bookmark: Bookmark) {
         if let destination = URL(string: bookmark.url) {
-            if destination.scheme == "nomad" && (destination.host == "settings" || destination.host == "tune") {
+            if destination.scheme == "nomad" && destination.host == "settings" {
                 openSettings()
             } else if let current = activeTab, current.isBlank {
                 current.load(url: destination)

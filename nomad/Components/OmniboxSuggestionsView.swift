@@ -84,22 +84,12 @@ struct OmniboxSuggestionsView: View {
             results.append(OmniboxSuggestionItem(
                 kind: .search,
                 title: "Search for \"\(trimmed)\"",
-                subtitle: searchEngineName,
+                subtitle: settings.searchEngineName,
                 url: searchURL
             ))
         }
 
         return results
-    }
-
-    private var searchEngineName: String {
-        switch settings.searchEngine {
-        case "google": return "Google"
-        case "bing": return "Bing"
-        case "brave": return "Brave"
-        case "ecosia": return "Ecosia"
-        default: return "DuckDuckGo"
-        }
     }
 
     var body: some View {

@@ -55,7 +55,7 @@ final class FaviconService {
             return await existing.value
         }
 
-        let isPrivate = isPrivateOrLocalHost(cleanedHost)
+        let isPrivate = cleanedHost.isLocalOrPrivateHost
 
         let task = Task<NSImage?, Never> {
             // Strategy 1: High-res DuckDuckGo favicon API (global CDN, 32x32 ico) - public domains only
@@ -112,20 +112,5 @@ final class FaviconService {
             h.removeFirst(4)
         }
         return h
-    }
-
-    private func isPrivateOrLocalHost(_ host: String) -> Bool {
-        let lower = host.lowercased()
-        if lower == "localhost" || lower == "127.0.0.1" || lower == "::1" { return true }
-        if lower.hasSuffix(".local") || lower.hasSuffix(".internal") || lower.hasSuffix(".lan") || lower.hasSuffix(".home") || lower.hasSuffix(".arpa") { return true }
-        if !lower.contains(".") { return true }
-        if lower.starts(with: "192.168.") || lower.starts(with: "10.") || lower.starts(with: "127.") { return true }
-        if lower.starts(with: "172.") {
-            let parts = lower.split(separator: ".")
-            if parts.count >= 2, let second = Int(parts[1]), (16...31).contains(second) {
-                return true
-            }
-        }
-        return false
     }
 }

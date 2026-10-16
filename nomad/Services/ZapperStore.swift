@@ -54,18 +54,6 @@ final class ZapperStore: ObservableObject {
         }
     }
 
-    /// Removes a zapped selector for a specific domain host
-    func removeSelector(_ selector: String, for host: String) {
-        guard var current = zappedByHost[host] else { return }
-        current.removeAll { $0 == selector }
-        if current.isEmpty {
-            zappedByHost.removeValue(forKey: host)
-        } else {
-            zappedByHost[host] = current
-        }
-        save()
-    }
-
     /// Clears all zapped selectors for a specific host
     func clearSelectors(for host: String) {
         zappedByHost.removeValue(forKey: host)

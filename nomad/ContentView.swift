@@ -24,7 +24,7 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 640, minHeight: 420)
-        .background(WindowConfigurator())
+        .background(WindowConfigurator(isVibrant: settings.isVibrant))
         .preferredColorScheme(settings.colorScheme)
         .onAppear {
             NomadAgentServer.shared.start(store: store)
@@ -35,22 +35,47 @@ struct ContentView: View {
     }
 }
 
-/// Permanently disables automatic window dragging so tabs can be dragged freely without moving the window.
+/// Permanently disables automatic window dragging so tabs can be dragged freely without moving the window,
+/// and synchronizes window transparency / vibrancy.
 private struct WindowConfigurator: NSViewRepresentable {
+    let isVibrant: Bool
+
     func makeNSView(context: Context) -> ConfigNSView {
-        ConfigNSView()
+        let view = ConfigNSView()
+        view.isVibrant = isVibrant
+        return view
     }
 
-    func updateNSView(_ nsView: ConfigNSView, context: Context) {}
+    func updateNSView(_ nsView: ConfigNSView, context: Context) {
+        if nsView.isVibrant != isVibrant {
+            nsView.isVibrant = isVibrant
+        }
+    }
 
     final class ConfigNSView: NSView {
+        var isVibrant: Bool = false {
+            didSet { apply() }
+        }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            apply()
+        }
+
+        private func apply() {
             guard let window = window else { return }
             window.isMovable = false
             window.isMovableByWindowBackground = false
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
+            if isVibrant {
+                window.isOpaque = false
+                window.backgroundColor = .clear
+            } else {
+                window.isOpaque = true
+                window.backgroundColor = .windowBackgroundColor
+            }
+            window.invalidateShadow()
             SettingsStore.shared.applyTheme()
         }
     }

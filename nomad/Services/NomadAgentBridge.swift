@@ -58,7 +58,7 @@ struct NomadBounds: Codable {
 
 /// Action request issued by an AI agent or DevX tool.
 struct NomadAction: Codable {
-    var action: String = "click" // "click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight"
+    var action: String? = "click" // "click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight"
     var target: String? // e.g. "e1", "e2", or CSS selector fallback
     var text: String?
     var key: String? // "Enter", "Escape", "Tab", or chords "Meta+A", "Control+Enter"
@@ -77,61 +77,8 @@ struct NomadAction: Codable {
     var optionValue: String?
     var optionText: String?
     var modifiers: [String]?
-
-    enum CodingKeys: String, CodingKey {
-        case action, type, target, elementId, selector, text, key, direction, amount
-        case submit, blur, change, force, x, y, toX, toY
-        case scrollDeltaY, deltaY, scrollDeltaX, deltaX, optionValue, optionText, modifiers
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.action = try c.decodeIfPresent(String.self, forKey: .action) ?? c.decodeIfPresent(String.self, forKey: .type) ?? "click"
-        self.target = try c.decodeIfPresent(String.self, forKey: .target) ?? c.decodeIfPresent(String.self, forKey: .elementId) ?? c.decodeIfPresent(String.self, forKey: .selector)
-        self.text = try c.decodeIfPresent(String.self, forKey: .text)
-        self.key = try c.decodeIfPresent(String.self, forKey: .key)
-        self.submit = try c.decodeIfPresent(Bool.self, forKey: .submit)
-        self.blur = try c.decodeIfPresent(Bool.self, forKey: .blur)
-        self.change = try c.decodeIfPresent(Bool.self, forKey: .change)
-        self.force = try c.decodeIfPresent(Bool.self, forKey: .force)
-        self.x = try c.decodeIfPresent(CGFloat.self, forKey: .x)
-        self.y = try c.decodeIfPresent(CGFloat.self, forKey: .y)
-        self.toX = try c.decodeIfPresent(CGFloat.self, forKey: .toX)
-        self.toY = try c.decodeIfPresent(CGFloat.self, forKey: .toY)
-        let dy = try c.decodeIfPresent(CGFloat.self, forKey: .scrollDeltaY) ?? c.decodeIfPresent(CGFloat.self, forKey: .deltaY)
-        let dx = try c.decodeIfPresent(CGFloat.self, forKey: .scrollDeltaX) ?? c.decodeIfPresent(CGFloat.self, forKey: .deltaX)
-        self.scrollDeltaY = dy
-        self.scrollDeltaX = dx
-        self.amount = dy != nil ? abs(dy!) : (dx != nil ? abs(dx!) : try c.decodeIfPresent(CGFloat.self, forKey: .amount))
-        self.direction = dy != nil ? (dy! >= 0 ? "down" : "up") : (dx != nil ? (dx! >= 0 ? "right" : "left") : try c.decodeIfPresent(String.self, forKey: .direction))
-        self.optionValue = try c.decodeIfPresent(String.self, forKey: .optionValue)
-        self.optionText = try c.decodeIfPresent(String.self, forKey: .optionText)
-        self.modifiers = try c.decodeIfPresent([String].self, forKey: .modifiers)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(action, forKey: .action)
-        try c.encodeIfPresent(target, forKey: .target)
-        try c.encodeIfPresent(text, forKey: .text)
-        try c.encodeIfPresent(key, forKey: .key)
-        try c.encodeIfPresent(direction, forKey: .direction)
-        try c.encodeIfPresent(amount, forKey: .amount)
-        try c.encodeIfPresent(submit, forKey: .submit)
-        try c.encodeIfPresent(blur, forKey: .blur)
-        try c.encodeIfPresent(change, forKey: .change)
-        try c.encodeIfPresent(force, forKey: .force)
-        try c.encodeIfPresent(x, forKey: .x)
-        try c.encodeIfPresent(y, forKey: .y)
-        try c.encodeIfPresent(toX, forKey: .toX)
-        try c.encodeIfPresent(toY, forKey: .toY)
-        try c.encodeIfPresent(scrollDeltaY, forKey: .scrollDeltaY)
-        try c.encodeIfPresent(scrollDeltaX, forKey: .scrollDeltaX)
-        try c.encodeIfPresent(optionValue, forKey: .optionValue)
-        try c.encodeIfPresent(optionText, forKey: .optionText)
-        try c.encodeIfPresent(modifiers, forKey: .modifiers)
-    }
 }
+
 
 /// Execution outcome of an action.
 struct NomadActionResult: Codable {

@@ -8,6 +8,7 @@
 import AppKit
 import WebKit
 import Combine
+import SwiftUI
 
 /// Manages native Picture-in-Picture / Floating Video for Nomad.
 /// Bypasses WebKit's programmatic click restrictions by lifting the active WKWebView
@@ -17,7 +18,8 @@ final class FloatingVideoManager: ObservableObject {
     static let shared = FloatingVideoManager()
 
     private var panel: FloatPanel?
-    private var controls: FloatControls?
+    private var floatState = FloatState()
+    private weak var controlsHost: NSView?
     private weak var activeTab: Tab?
     private weak var hostedWebView: WKWebView?
     private var ticker: Timer?
@@ -125,28 +127,23 @@ final class FloatingVideoManager: ObservableObject {
             webView.bottomAnchor.constraint(equalTo: ground.bottomAnchor)
         ])
 
-        let controls = FloatControls(frame: ground.bounds)
-        controls.translatesAutoresizingMaskIntoConstraints = false
-        controls.onClose = { [weak self] in
-            self?.land()
-        }
-        controls.onReturn = { [weak self] in
-            self?.returnToTab()
-        }
-        controls.onPlayPause = { [weak self] in
-            self?.togglePlayback()
-        }
-        controls.onSkip = { [weak self] seconds in
-            self?.skip(seconds: seconds)
-        }
-        ground.addSubview(controls)
+        let controlsView = FloatControlsView(
+            state: floatState,
+            onClose: { [weak self] in self?.land() },
+            onReturn: { [weak self] in self?.returnToTab() },
+            onPlayPause: { [weak self] in self?.togglePlayback() },
+            onSkip: { [weak self] seconds in self?.skip(seconds: seconds) }
+        )
+        let controlsHost = NSHostingView(rootView: controlsView)
+        controlsHost.translatesAutoresizingMaskIntoConstraints = false
+        ground.addSubview(controlsHost)
         NSLayoutConstraint.activate([
-            controls.leadingAnchor.constraint(equalTo: ground.leadingAnchor),
-            controls.trailingAnchor.constraint(equalTo: ground.trailingAnchor),
-            controls.topAnchor.constraint(equalTo: ground.topAnchor),
-            controls.bottomAnchor.constraint(equalTo: ground.bottomAnchor)
+            controlsHost.leadingAnchor.constraint(equalTo: ground.leadingAnchor),
+            controlsHost.trailingAnchor.constraint(equalTo: ground.trailingAnchor),
+            controlsHost.topAnchor.constraint(equalTo: ground.topAnchor),
+            controlsHost.bottomAnchor.constraint(equalTo: ground.bottomAnchor)
         ])
-        self.controls = controls
+        self.controlsHost = controlsHost
 
         panel.contentView = ground
         panel.invalidateShadow()
@@ -178,7 +175,7 @@ final class FloatingVideoManager: ObservableObject {
             webView.evaluateJavaScript(IsolateScript.off, completionHandler: nil)
         }
 
-        controls = nil
+        controlsHost = nil
         hostedWebView = nil
         activeTab = nil
 
@@ -204,7 +201,7 @@ final class FloatingVideoManager: ObservableObject {
         guard let webView = hostedWebView else { return }
         webView.evaluateJavaScript(IsolateScript.toggle) { [weak self] result, _ in
             if let isPlaying = result as? Bool {
-                self?.controls?.isPlaying = isPlaying
+                self?.floatState.isPlaying = isPlaying
             }
         }
     }
@@ -223,7 +220,7 @@ final class FloatingVideoManager: ObservableObject {
                 if webView.superview !== ground {
                     webView.removeFromSuperview()
                     webView.translatesAutoresizingMaskIntoConstraints = false
-                    if let ctrl = self.controls {
+                    if let ctrl = self.controlsHost {
                         ground.addSubview(webView, positioned: .below, relativeTo: ctrl)
                     } else {
                         ground.addSubview(webView)
@@ -240,8 +237,8 @@ final class FloatingVideoManager: ObservableObject {
                    result.count >= 2 {
                     let progress = result[0] as? Double ?? 0.0
                     let isPlaying = result[1] as? Bool ?? true
-                    self.controls?.progress = progress
-                    self.controls?.isPlaying = isPlaying
+                    self.floatState.progress = progress
+                    self.floatState.isPlaying = isPlaying
                 }
             }
         }
@@ -254,154 +251,79 @@ private final class FloatPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-// MARK: - FloatControls
-private final class FloatControls: NSView {
-    var onClose: (() -> Void)?
-    var onReturn: (() -> Void)?
-    var onPlayPause: (() -> Void)?
-    var onSkip: ((Double) -> Void)?
+// MARK: - FloatState & FloatControlsView (Declarative SwiftUI Overlay)
+private final class FloatState: ObservableObject {
+    @Published var isPlaying: Bool = true
+    @Published var progress: Double = 0.0
+}
 
-    var isPlaying: Bool = true {
-        didSet {
-            let symbol = isPlaying ? "pause.fill" : "play.fill"
-            pauseBtn.image = glyph(symbol, 18)
-        }
-    }
+private struct FloatControlsView: View {
+    @ObservedObject var state: FloatState
+    var onClose: () -> Void
+    var onReturn: () -> Void
+    var onPlayPause: () -> Void
+    var onSkip: (Double) -> Void
 
-    var progress: Double = 0.0 {
-        didSet {
-            let clamped = max(0, min(1, progress))
-            progressBar.frame = NSRect(x: 0, y: 0, width: bounds.width * CGFloat(clamped), height: 3)
-        }
-    }
+    @State private var isHovered: Bool = false
 
-    private let closeBtn = NSButton()
-    private let returnBtn = NSButton()
-    private let rewindBtn = NSButton()
-    private let pauseBtn = NSButton()
-    private let forwardBtn = NSButton()
-    private let progressBar = NSView()
-    private let scrim = CAGradientLayer()
+    var body: some View {
+        ZStack {
+            if isHovered {
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.45),
+                        Color.clear,
+                        Color.clear,
+                        Color.black.opacity(0.55)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .allowsHitTesting(false)
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        setupViews()
-    }
+                VStack {
+                    HStack {
+                        button(icon: "xmark", size: 11, circleSize: 30, action: onClose)
+                        Spacer()
+                        button(icon: "arrow.up.forward", size: 12, circleSize: 30, action: onReturn)
+                    }
+                    .padding(14)
 
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        setupViews()
-    }
+                    Spacer()
 
-    private func setupViews() {
-        wantsLayer = true
+                    HStack(spacing: 16) {
+                        button(icon: "gobackward.15", size: 15, circleSize: 38, action: { onSkip(-15) })
+                        button(icon: state.isPlaying ? "pause.fill" : "play.fill", size: 18, circleSize: 50, action: onPlayPause)
+                        button(icon: "goforward.15", size: 15, circleSize: 38, action: { onSkip(15) })
+                    }
 
-        scrim.colors = [
-            NSColor(white: 0, alpha: 0.45).cgColor,
-            NSColor(white: 0, alpha: 0).cgColor,
-            NSColor(white: 0, alpha: 0).cgColor,
-            NSColor(white: 0, alpha: 0.55).cgColor
-        ]
-        scrim.locations = [0, 0.28, 0.66, 1]
-        scrim.opacity = 0
-        layer?.addSublayer(scrim)
+                    Spacer()
 
-        dress(closeBtn, "xmark", 11, round: 15, action: #selector(closeClicked))
-        dress(returnBtn, "arrow.up.forward", 12, round: 15, action: #selector(returnClicked))
-        dress(rewindBtn, "gobackward.15", 15, round: 19, action: #selector(rewindClicked))
-        dress(pauseBtn, "pause.fill", 18, round: 25, action: #selector(pauseClicked))
-        dress(forwardBtn, "goforward.15", 15, round: 19, action: #selector(forwardClicked))
-
-        progressBar.wantsLayer = true
-        progressBar.layer?.backgroundColor = NSColor(red: 0.95, green: 0.26, blue: 0.21, alpha: 0.9).cgColor
-        progressBar.alphaValue = 0
-        addSubview(progressBar)
-
-        buttons.forEach { $0.alphaValue = 0 }
-    }
-
-    private var buttons: [NSButton] { [closeBtn, returnBtn, rewindBtn, pauseBtn, forwardBtn] }
-
-    private func dress(_ btn: NSButton, _ symbol: String, _ size: CGFloat, round: CGFloat, action: Selector) {
-        btn.image = glyph(symbol, size)
-        btn.isBordered = false
-        btn.bezelStyle = .regularSquare
-        btn.imagePosition = .imageOnly
-        btn.target = self
-        btn.action = action
-        btn.wantsLayer = true
-        btn.layer?.backgroundColor = NSColor(white: 0.12, alpha: 0.65).cgColor
-        btn.layer?.cornerRadius = round
-        addSubview(btn)
-    }
-
-    private func glyph(_ name: String, _ size: CGFloat) -> NSImage? {
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
-        let look = NSImage.SymbolConfiguration(pointSize: size, weight: .semibold)
-            .applying(.init(paletteColors: [.white]))
-        return image?.withSymbolConfiguration(look)
-    }
-
-    override func layout() {
-        super.layout()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        scrim.frame = bounds
-        CATransaction.commit()
-
-        closeBtn.frame = NSRect(x: 14, y: bounds.height - 44, width: 30, height: 30)
-        returnBtn.frame = NSRect(x: bounds.width - 44, y: bounds.height - 44, width: 30, height: 30)
-
-        let middle = bounds.midY - 25
-        pauseBtn.frame = NSRect(x: bounds.midX - 25, y: middle, width: 50, height: 50)
-        rewindBtn.frame = NSRect(x: bounds.midX - 25 - 54, y: middle + 6, width: 38, height: 38)
-        forwardBtn.frame = NSRect(x: bounds.midX + 25 + 16, y: middle + 6, width: 38, height: 38)
-
-        let clamped = max(0, min(1, progress))
-        progressBar.frame = NSRect(x: 0, y: 0, width: bounds.width * CGFloat(clamped), height: 3)
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let view = super.hitTest(point)
-        for btn in buttons {
-            let ptInBtn = btn.convert(point, from: self)
-            if btn.bounds.contains(ptInBtn) && btn.alphaValue > 0.05 {
-                return btn
+                    GeometryReader { geo in
+                        Rectangle()
+                            .fill(Color(red: 0.95, green: 0.26, blue: 0.21, opacity: 0.9))
+                            .frame(width: geo.size.width * CGFloat(max(0, min(1, state.progress))), height: 3)
+                    }
+                    .frame(height: 3)
+                }
             }
         }
-        return view === self ? nil : view
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.16), value: isHovered)
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self
-        ))
-    }
-
-    override func mouseEntered(with event: NSEvent) { fade(to: 1.0) }
-    override func mouseExited(with event: NSEvent) { fade(to: 0.0) }
-
-    private func fade(to value: CGFloat) {
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.16
-            buttons.forEach { $0.animator().alphaValue = value }
-            progressBar.animator().alphaValue = value
+    private func button(icon: String, size: CGFloat, circleSize: CGFloat, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: circleSize, height: circleSize)
+                .background(Color.black.opacity(0.65), in: Circle())
         }
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(0.16)
-        scrim.opacity = Float(value)
-        CATransaction.commit()
+        .buttonStyle(.plain)
     }
-
-    @objc private func closeClicked() { onClose?() }
-    @objc private func returnClicked() { onReturn?() }
-    @objc private func pauseClicked() { onPlayPause?() }
-    @objc private func rewindClicked() { onSkip?(-15) }
-    @objc private func forwardClicked() { onSkip?(15) }
 }
 
 // MARK: - Isolate JavaScript (Proven macOS WebKit Isolation Architecture)

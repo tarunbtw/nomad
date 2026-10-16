@@ -56,7 +56,6 @@ struct BrowserView: View {
                     .ignoresSafeArea()
             }
         }
-        .background(WindowVibrancyController(isVibrant: settings.isVibrant))
         .preferredColorScheme(settings.colorScheme)
         .tint(settings.accentColor)
         .onExitCommand {
@@ -83,7 +82,7 @@ struct BrowserView: View {
             Button("Next Tab") { store.selectNextTab() }.keyboardShortcut("}", modifiers: .command)
             Button("Settings") { store.openSettings() }.keyboardShortcut(",", modifiers: .command)
             Button("History") { store.openSettings(section: "History") }.keyboardShortcut("y", modifiers: .command)
-            Button("Bookmark") { toggleBookmark() }.keyboardShortcut("d", modifiers: .command)
+            Button("Bookmark") { store.toggleBookmark() }.keyboardShortcut("d", modifiers: .command)
             Button("Zoom In") { store.activeTab?.zoomIn() }.keyboardShortcut("+", modifiers: .command)
             Button("Zoom In Eq") { store.activeTab?.zoomIn() }.keyboardShortcut("=", modifiers: .command)
             Button("Zoom Out") { store.activeTab?.zoomOut() }.keyboardShortcut("-", modifiers: .command)
@@ -100,19 +99,6 @@ struct BrowserView: View {
         .allowsHitTesting(false)
     }
 
-    private func toggleBookmark() {
-        guard let tab = store.activeTab,
-              let urlString = tab.url?.absoluteString,
-              !tab.isBlank, !tab.isInternalPage, !urlString.isEmpty, urlString != "about:blank" else { return }
-        withAnimation(.easeInOut(duration: 0.15)) {
-            if settings.isBookmarked(urlString) {
-                settings.removeBookmark(url: urlString)
-            } else {
-                let title = tab.title.isEmpty ? (tab.url?.host ?? urlString) : tab.title
-                settings.addBookmark(title: title, url: urlString)
-            }
-        }
-    }
 
     private func toggleFindBar() {
         guard let tab = store.activeTab, !tab.isInternalPage && !tab.isBlank else { return }
@@ -484,49 +470,6 @@ struct VisualEffectView: NSViewRepresentable {
         nsView.material = material
         nsView.blendingMode = blendingMode
         nsView.state = .active
-    }
-}
-
-/// Dynamic window vibrancy coordinator updating NSWindow opacity and background color.
-struct WindowVibrancyController: NSViewRepresentable {
-    let isVibrant: Bool
-
-    func makeNSView(context: Context) -> ConfigNSView {
-        let view = ConfigNSView()
-        view.isVibrant = isVibrant
-        return view
-    }
-
-    func updateNSView(_ nsView: ConfigNSView, context: Context) {
-        if nsView.isVibrant != isVibrant {
-            nsView.isVibrant = isVibrant
-        }
-    }
-}
-
-final class ConfigNSView: NSView {
-    var isVibrant: Bool = false {
-        didSet {
-            apply()
-        }
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        apply()
-    }
-
-    private func apply() {
-        guard let window = window else { return }
-        window.titlebarAppearsTransparent = true
-        if isVibrant {
-            window.isOpaque = false
-            window.backgroundColor = .clear
-        } else {
-            window.isOpaque = true
-            window.backgroundColor = .windowBackgroundColor
-        }
-        window.invalidateShadow()
     }
 }
 

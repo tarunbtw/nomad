@@ -20,7 +20,6 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
     private var popover: NSPopover?
     private var web: WKWebView?
     private var page: PopupPage?
-    private var measuring: Timer?
     private(set) var extensionID: String?
     private weak var button: NSView?
     private var closedByButton: (id: String, at: Date)?
@@ -33,10 +32,8 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
         return ["id": "popup", "url": url.absoluteString, "visible": true, "focused": popover?.contentViewController?.view.window?.isKeyWindow == true]
     }
 
-    /// Each extension's popup size, so the next opening starts there.
     private static var lastSize: [String: NSSize] = [:]
     private var shown = false
-    private var ticks = 0
 
     func show(_ url: URL, for context: WKWebExtensionContext, from anchor: NSView?) {
         close()
@@ -99,20 +96,13 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
     }
 
     private func follow() {
-        guard measuring == nil else { return }
-        firstMeasure()
-        ticks = 0
-        measuring = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                self.grow()
-            }
+        measureAndResize()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.measureAndResize()
         }
     }
 
     func close() {
-        measuring?.invalidate()
-        measuring = nil
         let closing = popover
         forget()
         closing?.performClose(nil)
@@ -141,49 +131,27 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
 
     // MARK: - DOM Sizing
 
-    static let preferred = """
-    () => {
-      const d = document.documentElement;
-      if (!d) return null;
-      const m = window.__nomadSizing || (window.__nomadSizing = {});
-      const saved = d.getAttribute("style");
-      const back = () => saved === null ? d.removeAttribute("style") : d.setAttribute("style", saved);
-      const box = d.getBoundingClientRect();
-      let w;
-      if (Math.abs(box.width - innerWidth) > 1) w = m.w = box.width;
-      else if (m.w && Math.abs(m.w - innerWidth) <= 1) w = m.w;
-      else {
-        d.style.setProperty("width", "min-content", "important");
-        const narrowest = d.getBoundingClientRect().width;
-        back();
-        w = narrowest >= 100 ? narrowest : Math.max(narrowest, d.scrollWidth);
-      }
-      w = Math.min(800, Math.max(25, Math.ceil(w)));
-      d.style.setProperty("width", w + "px", "important");
-      let h = d.getBoundingClientRect().height;
-      if (Math.abs(h - innerHeight) > 1) m.h = h;
-      else if (m.h && Math.abs(m.h - innerHeight) <= 1) h = m.h;
-      else {
-        d.style.setProperty("height", "auto", "important");
-        d.style.setProperty("min-height", "0", "important");
-        h = d.getBoundingClientRect().height;
-      }
-      back();
-      return [w, Math.min(600, Math.max(25, Math.ceil(h)))];
-    }
-    """
-
     @objc(_webView:navigationDidFinishDocumentLoad:)
     func webView(_ webView: WKWebView, navigationDidFinishDocumentLoad navigation: WKNavigation?) {
         guard webView === web else { return }
-        firstMeasure()
+        measureAndResize()
     }
 
-    private func firstMeasure() {
+    private func measureAndResize() {
         guard let web else { return }
         Task { @MainActor [weak self] in
             guard let self, web === self.web else { return }
-            guard let value = try? await web.evaluateJavaScript("(\(ExtensionPopup.preferred))()"),
+            let js = """
+            (() => {
+                const d = document.documentElement;
+                if (!d) return null;
+                const b = document.body;
+                const w = Math.min(800, Math.max(100, Math.ceil(Math.max(d.scrollWidth, d.offsetWidth, b ? b.scrollWidth : 0))));
+                const h = Math.min(600, Math.max(50, Math.ceil(Math.max(d.scrollHeight, d.offsetHeight, b ? b.scrollHeight : 0))));
+                return [w, h];
+            })()
+            """
+            guard let value = try? await web.evaluateJavaScript(js),
                   let pair = value as? [Double], pair.count == 2 else { return }
             self.apply(NSSize(width: pair[0], height: pair[1]))
         }
@@ -199,65 +167,6 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
         }
         if let id = extensionID { ExtensionPopup.lastSize[id] = size }
         reveal()
-    }
-
-    static let reach = """
-    ((key) => {
-      const d = document.documentElement;
-      if (!d) return null;
-      if (key === "height") return d.scrollHeight;
-      const own = d.getBoundingClientRect().width;
-      if (own > innerWidth + 1) return own;
-      const saved = d.getAttribute("style");
-      d.style.setProperty("width", "min-content", "important");
-      const narrowest = d.getBoundingClientRect().width;
-      saved === null ? d.removeAttribute("style") : d.setAttribute("style", saved);
-      return narrowest >= 100 ? narrowest : Math.max(narrowest, d.scrollWidth);
-    })
-    """
-
-    private func grow() {
-        guard shown, let web, popover != nil else {
-            measuring?.invalidate()
-            measuring = nil
-            return
-        }
-        ticks += 1
-        if ticks > 16 {
-            // Sized and settled (4 seconds). Invalidate timer to eliminate continuous CPU wakeups.
-            measuring?.invalidate()
-            measuring = nil
-            return
-        }
-
-        if ticks <= 8 {
-            Task { @MainActor [weak self] in
-                guard let self, let popover = self.popover else { return }
-                guard let value = try? await web.evaluateJavaScript("(\(ExtensionPopup.preferred))()"),
-                      let pair = value as? [Double], pair.count == 2 else { return }
-                let wanted = NSSize(width: pair[0], height: pair[1])
-                let now = popover.contentSize
-                if abs(wanted.width - now.width) > 2 || abs(wanted.height - now.height) > 2 {
-                    self.apply(wanted)
-                }
-            }
-            return
-        }
-
-        if ticks > 24, ticks % 4 != 0 { return }
-
-        let js = "[\(ExtensionPopup.reach)('width'), (() => { const d = document.documentElement; return d && d.scrollHeight > d.clientHeight ? d.scrollHeight : 0; })(), (() => { const m = window.__nomadSizing || (window.__nomadSizing = {}), w = document.documentElement.getBoundingClientRect().width; if (Math.abs(w - innerWidth) > 1) return m.w = w; return m.w && Math.abs(m.w - innerWidth) <= 1 ? m.w : 0; })()]"
-        Task { @MainActor [weak self] in
-            guard let self, let popover = self.popover else { return }
-            guard let value = try? await web.evaluateJavaScript(js),
-                  let pair = value as? [Double], pair.count == 3 else { return }
-            let now = popover.contentSize
-            let width = pair[2] > 0 ? max(25, pair[2].rounded(.up)) : max(now.width, pair[0])
-            let wanted = NSSize(width: min(800, width), height: min(600, max(now.height, pair[1])))
-            if wanted != now {
-                self.apply(wanted)
-            }
-        }
     }
 
     // MARK: - Delegates
@@ -285,8 +194,6 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
 
     func popoverDidClose(_ notification: Notification) {
         guard (notification.object as? NSPopover) === popover else { return }
-        measuring?.invalidate()
-        measuring = nil
         forget()
     }
 }

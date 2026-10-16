@@ -49,20 +49,8 @@ final class StageHostView: NSView {
         layerContentsRedrawPolicy = .onSetNeedsDisplay
     }
 
-    override func layout() {
-        super.layout()
-        if let active = activeView, active.frame != bounds {
-            active.frame = bounds
-        }
-    }
-
     func show(_ newView: NSView?) {
-        guard activeView !== newView else {
-            if let active = activeView, active.frame != bounds {
-                active.frame = bounds
-            }
-            return
-        }
+        guard activeView !== newView else { return }
 
         // Remove currently displayed web view without destroying it, only if it is actually our subview
         if let current = activeView, current.superview === self {

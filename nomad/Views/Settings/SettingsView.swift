@@ -19,7 +19,6 @@ struct SettingsView: View {
         get { Section(rawValue: settings.activeSection) ?? .general }
         nonmutating set { settings.activeSection = newValue.rawValue }
     }
-    @State private var importStatusMessage: String? = nil
     @State private var hexInputText: String = ""
     @ObservedObject private var extensionManager = ExtensionManager.shared
     @ObservedObject private var historyStore = HistoryStore.shared
@@ -167,28 +166,6 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Import bookmarks from Chrome, Firefox, or Safari (HTML or JSON)")
-            }
-
-            // Optional import feedback status banner
-            if let status = importStatusMessage {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(settings.accentColor)
-                        .font(.system(size: 13))
-                    Text(status)
-                        .font(.system(size: 12, weight: .medium))
-                    Spacer()
-                    Button(action: { withAnimation { importStatusMessage = nil } }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(settings.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .transition(.opacity)
             }
 
             // Bookmarks List
@@ -950,38 +927,6 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
         )
-    }
-
-    private func importBookmarksFromFile() {
-        let panel = NSOpenPanel()
-        panel.title = "Import Bookmarks"
-        panel.message = "Select an exported bookmarks HTML file or bookmarks JSON file from Chrome, Firefox, or Safari."
-        panel.prompt = "Import"
-        panel.allowedContentTypes = [
-            UTType.html,
-            UTType.json,
-            UTType.plainText,
-            UTType.data
-        ]
-        panel.allowsOtherFileTypes = true
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-
-        if panel.runModal() == .OK, let url = panel.url {
-            let count = settings.importBookmarks(from: url)
-            withAnimation {
-                if count > 0 {
-                    importStatusMessage = "Successfully imported \(count) bookmark\(count == 1 ? "" : "s")."
-                } else {
-                    importStatusMessage = "No new bookmarks found in selected file."
-                }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                withAnimation {
-                    importStatusMessage = nil
-                }
-            }
-        }
     }
 
     // MARK: - Appearance & Atmosphere Helpers

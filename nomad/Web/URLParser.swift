@@ -52,7 +52,7 @@ enum URLParser {
 
         // Check if text looks like a host or IP (e.g. "github.com", "localhost:3000", "127.0.0.1")
         if looksLikeHost(trimmed) {
-            let scheme = isLocalHost(trimmed) ? "http://" : "https://"
+            let scheme = trimmed.isLocalOrPrivateHost ? "http://" : "https://"
             if let url = URL(string: scheme + trimmed) {
                 return url
             }
@@ -71,7 +71,7 @@ enum URLParser {
 
         let cleanHost = URL(string: "http://\(string)")?.host ?? string
 
-        if isLocalHost(cleanHost) { return true }
+        if cleanHost.isLocalOrPrivateHost { return true }
 
         // Must have at least one dot with valid characters and a common TLD structure
         let parts = cleanHost.components(separatedBy: ".")
@@ -80,17 +80,23 @@ enum URLParser {
         // Valid TLD check (letters only, 2 to 63 characters)
         return tld.count >= 2 && tld.count <= 63 && tld.allSatisfy { $0.isASCII && $0.isLetter }
     }
+}
 
-    /// Detects local development environments (localhost, 127.0.0.1, etc.)
-    private static func isLocalHost(_ string: String) -> Bool {
-        let lower = string.lowercased()
+extension String {
+    /// Detects local development environments and private networks (localhost, 127.0.0.1, 192.168.x, etc.)
+    var isLocalOrPrivateHost: Bool {
+        let lower = self.lowercased()
         let hostPart = lower.components(separatedBy: ":").first ?? lower
-        return hostPart == "localhost"
-            || hostPart.hasSuffix(".local")
-            || hostPart.hasSuffix(".localhost")
-            || hostPart == "127.0.0.1"
-            || hostPart == "0.0.0.0"
-            || hostPart.hasPrefix("192.168.")
-            || hostPart.hasPrefix("10.")
+        if hostPart == "localhost" || hostPart == "127.0.0.1" || hostPart == "::1" || hostPart == "0.0.0.0" { return true }
+        if hostPart.hasSuffix(".local") || hostPart.hasSuffix(".localhost") || hostPart.hasSuffix(".internal") || hostPart.hasSuffix(".lan") || hostPart.hasSuffix(".home") || hostPart.hasSuffix(".arpa") { return true }
+        if !hostPart.contains(".") { return true }
+        if hostPart.hasPrefix("192.168.") || hostPart.hasPrefix("10.") || hostPart.hasPrefix("127.") { return true }
+        if hostPart.hasPrefix("172.") {
+            let parts = hostPart.split(separator: ".")
+            if parts.count >= 2, let second = Int(parts[1]), (16...31).contains(second) {
+                return true
+            }
+        }
+        return false
     }
 }

@@ -110,13 +110,6 @@ final class HistoryStore: ObservableObject {
         let todayStart = calendar.startOfDay(for: now)
         let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: todayStart) ?? todayStart
 
-        let dateFormatter: DateFormatter = {
-            let df = DateFormatter()
-            df.dateStyle = .medium
-            df.timeStyle = .none
-            return df
-        }()
-
         let groupedDict = Dictionary(grouping: sourceItems) { item in
             calendar.startOfDay(for: item.timestamp)
         }
@@ -130,7 +123,7 @@ final class HistoryStore: ObservableObject {
             } else if date >= yesterdayStart {
                 title = "Yesterday"
             } else {
-                title = dateFormatter.string(from: date)
+                title = date.formatted(date: .abbreviated, time: .omitted)
             }
             let dayItems = (groupedDict[date] ?? []).sorted(by: { $0.timestamp > $1.timestamp })
             return HistoryDateGroup(id: "\(date.timeIntervalSince1970)", title: title, items: dayItems)

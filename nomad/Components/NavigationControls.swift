@@ -107,15 +107,7 @@ struct NavigationControls: View {
             let isBookmarked = canBookmark && settings.isBookmarked(urlString)
 
             Button(action: {
-                guard canBookmark else { return }
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    if isBookmarked {
-                        settings.removeBookmark(url: urlString)
-                    } else {
-                        let title = tab.title.isEmpty ? (tab.url?.host ?? urlString) : tab.title
-                        settings.addBookmark(title: title, url: urlString)
-                    }
-                }
+                store.toggleBookmark(for: tab)
             }) {
                 Image(systemName: isBookmarked ? "bookmark.fill" : "bookmark")
                     .font(.system(size: 11, weight: .medium))
