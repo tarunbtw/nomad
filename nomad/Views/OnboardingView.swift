@@ -76,8 +76,8 @@ struct OnboardingView: View {
 
                     // Stage 3: Ethos & Core Principles
                     VStack(spacing: 6) {
-                        Text("Built  with Swift and WebKit.")
-                        Text("bare, fast and zero telemetry.")
+                        Text("Built with Swift and WebKit.")
+                        Text("Bare,fast and zero telemetry.")
                     }
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(.secondary.opacity(0.9))
