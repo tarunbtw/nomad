@@ -858,7 +858,7 @@ enum NomadDOMScript {
 
                 var targetRequiredActions = ['type', 'clear', 'selectoption', 'drag', 'highlight'];
                 if (targetRequiredActions.indexOf(action) !== -1 && !targetId) {
-                    return { success: false, message: 'No target element specified for ' + action + ' action' };
+                    return { success: false, code: 'MISSING_TARGET', message: 'No target element specified for ' + action + ' action' };
                 }
 
                 if (targetId && !el && action !== 'scroll' && action !== 'press') {
@@ -948,12 +948,12 @@ enum NomadDOMScript {
                                 hit.click();
                                 return { success: true, message: 'Clicked coordinates (' + actionObj.x + ', ' + actionObj.y + ')' };
                             }
-                            return { success: false, message: 'No element at coordinates (' + actionObj.x + ', ' + actionObj.y + ')' };
+                            return { success: false, code: 'ELEMENT_NOT_FOUND', message: 'No element at coordinates (' + actionObj.x + ', ' + actionObj.y + ')' };
                         }
-                        return { success: false, message: 'No target element or coordinates specified for click action' };
+                        return { success: false, code: 'MISSING_TARGET', message: 'No target element or coordinates specified for click action' };
 
                     case 'hover':
-                        if (!el) return { success: false, message: 'No target element for hover action' };
+                        if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No target element for hover action' };
                         if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
                             try { el.ownerDocument.defaultView.frameElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
                         }
@@ -967,9 +967,9 @@ enum NomadDOMScript {
                         return { success: true, message: 'Hovered over ' + targetId, elementId: targetId };
 
                     case 'clear':
-                        if (!el) return { success: false, message: 'No target element for clear action' };
+                        if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No target element for clear action' };
                         if (!isTextEditable(el)) {
-                            return { success: false, message: 'Target element <' + el.tagName.toLowerCase() + '> is not an input or editable element' };
+                            return { success: false, code: 'NOT_EDITABLE', message: 'Target element <' + el.tagName.toLowerCase() + '> is not an input or editable element' };
                         }
                         if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
                             try { el.ownerDocument.defaultView.frameElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
@@ -1002,9 +1002,9 @@ enum NomadDOMScript {
                         return { success: true, message: 'Cleared value in ' + targetId, elementId: targetId };
 
                     case 'type':
-                        if (!el) return { success: false, message: 'No target element for type action' };
+                        if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No target element for type action' };
                         if (!isTextEditable(el)) {
-                            return { success: false, message: 'Target element <' + el.tagName.toLowerCase() + '> is not editable or an input control' };
+                            return { success: false, code: 'NOT_EDITABLE', message: 'Target element <' + el.tagName.toLowerCase() + '> is not editable or an input control' };
                         }
                         if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
                             try { el.ownerDocument.defaultView.frameElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
@@ -1071,7 +1071,7 @@ enum NomadDOMScript {
                         return { success: true, message: inputMsg, elementId: targetId };
 
                     case 'drag':
-                        if (!el) return { success: false, message: 'No source element for drag action' };
+                        if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No source element for drag action' };
                         el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
                         var srcRect = el.getBoundingClientRect();
                         var startX = Math.round(srcRect.left + srcRect.width / 2);
@@ -1122,7 +1122,7 @@ enum NomadDOMScript {
                         var normMain = mainKey.trim().toLowerCase();
                         if (mainKey.length > 1) {
                             if (!validNamedKeys[normMain]) {
-                                return { success: false, message: 'Unknown or unsupported key: ' + rawKey };
+                                return { success: false, code: 'INVALID_KEY', message: 'Unknown or unsupported key: ' + rawKey };
                             }
                             mainKey = validNamedKeys[normMain];
                         }
@@ -1161,7 +1161,7 @@ enum NomadDOMScript {
                     case 'selectoption':
                     case 'selectOption':
                         if (!el || el.tagName !== 'SELECT') {
-                            return { success: false, message: 'Target ' + targetId + ' is not a <select> element' };
+                            return { success: false, code: !el ? 'MISSING_TARGET' : 'NOT_A_SELECT', message: 'Target ' + targetId + ' is not a <select> element' };
                         }
                         var desiredVal = actionObj.optionValue;
                         var desiredTxt = actionObj.optionText;
@@ -1180,7 +1180,7 @@ enum NomadDOMScript {
                             el.dispatchEvent(new Event('change', { bubbles: true }));
                             return { success: true, message: 'Selected option in ' + targetId, elementId: targetId };
                         }
-                        return { success: false, message: 'Option not found in ' + targetId };
+                        return { success: false, code: 'OPTION_NOT_FOUND', message: 'Option not found in ' + targetId };
 
                     case 'scroll':
                         var dx = 0;
@@ -1228,12 +1228,12 @@ enum NomadDOMScript {
                         return { success: true, message: 'Scrolled ' + desc };
 
                     case 'highlight':
-                        if (!el) return { success: false, message: 'No target element to highlight' };
+                        if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No target element to highlight' };
                         self.showHighlight(el);
                         return { success: true, message: 'Highlighted ' + targetId, elementId: targetId };
 
                     default:
-                        return { success: false, message: 'Unknown action: ' + action };
+                        return { success: false, code: 'UNKNOWN_ACTION', message: 'Unknown action: ' + action };
                 }
             })(this);
 
