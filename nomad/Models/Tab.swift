@@ -180,7 +180,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         let effectiveConfig = configuration ?? ExtensionManager.shared.configuration(for: initialURL) ?? WebKitPool.makeConfiguration(isIncognito: isIncognito)
         let webView = BrowserWebView(frame: NSRect(x: 0, y: 0, width: 1180, height: 730), configuration: effectiveConfig)
         webView.customUserAgent = WebKitPool.customUserAgent
-        webView.allowsBackForwardNavigationGestures = true
+        webView.allowsBackForwardNavigationGestures = false
         webView.allowsMagnification = false
         webView.setMagnification(1.0, centeredAt: .zero)
         webView.pageZoom = 1.0
@@ -369,7 +369,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
 
         let newWebView = BrowserWebView(frame: NSRect(x: 0, y: 0, width: 1180, height: 730), configuration: targetConfig)
         newWebView.customUserAgent = WebKitPool.customUserAgent
-        newWebView.allowsBackForwardNavigationGestures = true
+        newWebView.allowsBackForwardNavigationGestures = false
         newWebView.allowsMagnification = false
         newWebView.setMagnification(1.0, centeredAt: .zero)
         newWebView.pageZoom = 1.0
@@ -955,6 +955,132 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
 @MainActor
 final class BrowserWebView: WKWebView {
     weak var tab: Tab?
+
+    private var swipeAccumulatedX: CGFloat = 0
+    private var isTrackingSwipe = false
+    private var swipeDirection: Tab.SwipeDirection? = nil
+    private let triggerThreshold: CGFloat = 65.0
+
+    override func scrollWheel(with event: NSEvent) {
+        guard let tab = tab, event.hasPreciseScrollingDeltas else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        let phase = event.phase
+        let momentumPhase = event.momentumPhase
+
+        // Ignore momentum scrolling for gesture triggers
+        if momentumPhase != [] {
+            if isTrackingSwipe {
+                tab.cancelSwipeGesture()
+                isTrackingSwipe = false
+                swipeDirection = nil
+                swipeAccumulatedX = 0
+            }
+            super.scrollWheel(with: event)
+            return
+        }
+
+        if phase == .began {
+            swipeAccumulatedX = 0
+            isTrackingSwipe = false
+            swipeDirection = nil
+
+            let dx = event.scrollingDeltaX
+            let dy = event.scrollingDeltaY
+
+            // Only capture if horizontal movement clearly dominates over vertical
+            if abs(dx) > abs(dy) * 1.5 && abs(dx) > 2.0 {
+                if dx > 0 && tab.webView.canGoBack {
+                    isTrackingSwipe = true
+                    swipeDirection = .back
+                    swipeAccumulatedX = dx
+                } else if dx < 0 && tab.webView.canGoForward {
+                    isTrackingSwipe = true
+                    swipeDirection = .forward
+                    swipeAccumulatedX = dx
+                }
+            }
+        } else if phase == .changed {
+            if isTrackingSwipe, let dir = swipeDirection {
+                swipeAccumulatedX += event.scrollingDeltaX
+
+                // Reverse movement aborts the gesture
+                if (dir == .back && swipeAccumulatedX < -10) || (dir == .forward && swipeAccumulatedX > 10) {
+                    tab.cancelSwipeGesture()
+                    isTrackingSwipe = false
+                    swipeDirection = nil
+                    swipeAccumulatedX = 0
+                    super.scrollWheel(with: event)
+                    return
+                }
+
+                let distance = abs(swipeAccumulatedX)
+                let progress = min(distance / triggerThreshold, 1.0)
+                let isTriggered = distance >= triggerThreshold
+
+                tab.updateSwipeGesture(
+                    direction: dir,
+                    progress: progress,
+                    distance: distance,
+                    isTriggered: isTriggered
+                )
+                return
+            } else if phase == .changed && !isTrackingSwipe && swipeAccumulatedX == 0 {
+                // If gesture started with subtle initial delta but is clearly a horizontal swipe
+                let dx = event.scrollingDeltaX
+                let dy = event.scrollingDeltaY
+                if abs(dx) > abs(dy) * 2.0 && abs(dx) > 5.0 {
+                    if dx > 0 && tab.webView.canGoBack {
+                        isTrackingSwipe = true
+                        swipeDirection = .back
+                        swipeAccumulatedX = dx
+                        let distance = abs(swipeAccumulatedX)
+                        tab.updateSwipeGesture(
+                            direction: .back,
+                            progress: min(distance / triggerThreshold, 1.0),
+                            distance: distance,
+                            isTriggered: distance >= triggerThreshold
+                        )
+                        return
+                    } else if dx < 0 && tab.webView.canGoForward {
+                        isTrackingSwipe = true
+                        swipeDirection = .forward
+                        swipeAccumulatedX = dx
+                        let distance = abs(swipeAccumulatedX)
+                        tab.updateSwipeGesture(
+                            direction: .forward,
+                            progress: min(distance / triggerThreshold, 1.0),
+                            distance: distance,
+                            isTriggered: distance >= triggerThreshold
+                        )
+                        return
+                    }
+                }
+            }
+        } else if phase == .ended {
+            if isTrackingSwipe, let dir = swipeDirection {
+                let distance = abs(swipeAccumulatedX)
+                let commit = distance >= triggerThreshold
+                tab.finishSwipeGesture(commit: commit, direction: dir)
+                isTrackingSwipe = false
+                swipeDirection = nil
+                swipeAccumulatedX = 0
+                return
+            }
+        } else if phase == .cancelled {
+            if isTrackingSwipe {
+                tab.cancelSwipeGesture()
+                isTrackingSwipe = false
+                swipeDirection = nil
+                swipeAccumulatedX = 0
+                return
+            }
+        }
+
+        super.scrollWheel(with: event)
+    }
 }
 
 // MARK: - Script Message Handler & Bridge

@@ -61,9 +61,11 @@ Title: Todo App
 [e4] <li "Buy milk">
 [e5] <a href="/login">Sign In</a> (offscreen)
 ```
-For dense pages, tune the budget with `limit` (default 100) or `offset`:
+For dense pages, tune the budget with `limit` (default 100) or `offset`, or request text-only summary:
 ```json
 nomad_snapshot({ "limit": 40, "offset": 0, "viewportOnly": true, "includeText": true })
+// Or token-efficient summary (~600–1,200 tokens, omits full elements array):
+nomad_snapshot({ "mode": "text" })
 ```
 
 > [!NOTE]
@@ -89,13 +91,17 @@ nomad_action({
 Supported action types:
 - `click`: Triggers synthetic PointerDown, PointerUp, and Click events at the element's center. Occlusion-aware: if an overlay or modal backdrop covers the element, the click hits the topmost covering element unless `force: true` is passed.
 - `hover`: Dispatches pointerover/pointerenter/mousemove sequence to open dropdown menus or tooltips.
-- `type`: Clears/focuses element and sets value via prototype setter (React 16+ and contentEditable compatible). Dispatches `input` events per keystroke. To commit changes, pass `submit: true` (presses Enter), `blur: true`, or `change: true`.
+- `type`: Focuses element and sets value via prototype setter (React 16+ and contentEditable compatible). Dispatches `input` events per keystroke. If text is empty/omitted and `submit: true` is passed, existing field content is preserved. To commit changes, pass `submit: true` (presses Enter), `blur: true`, or `change: true`.
 - `clear`: Wipes input/textarea/contentEditable value and triggers change events.
 - `press`: Simulates key press or modifier chord (e.g. `key: "Enter"`, `key: "Meta+A"`, `key: "Escape"`). Validates key names against standard named keys (`Enter`, `Tab`, `Escape`, `Backspace`, `Delete`, `ArrowUp/Down/Left/Right`, `Space`, function keys `F1`–`F12`, and modifier chords); rejects unknown key names.
 - `selectOption`: Chooses native HTML `<select>` dropdown option by `optionValue` or `optionText`. For custom ARIA/div dropdowns (e.g. Radix, HeadlessUI, React-Select), click the dropdown trigger element, wait/snapshot, and click the option element.
 - `scroll`: Scrolls the viewport by `scrollDeltaY` pixels (e.g. `300` to scroll down, `-300` to scroll up) or `scrollDeltaX`.
 - `drag`: Dispatches standard HTML5 drag-and-drop sequence (`dragstart`, `dragover`, `drop`, `dragend`) to destination (`toX`, `toY`).
 - `highlight`: Briefly flashes a high-contrast visual outline over the element for visual confirmation.
+
+> [!TIP]
+> **Ref Self-Healing & Stale Ref Protection:**
+> When asynchronous DOM shifts alter element indices between calls, Nomad automatically executes semantic signature matching (by ID, testId, name, or aria-label) to find the intended control. If an element reference is no longer in the DOM, was snapshotted as a non-editable tag, or resolves to an incompatible node (e.g. attempting to type into a shifted image, link, or checkbox), Nomad strictly returns `{ "success": false, "staleRef": true, "code": "STALE_REF" }` prompting you to call `nomad_snapshot` for fresh element refs instead of silently executing actions on arbitrary elements.
 
 > [!NOTE]
 > **JavaScript Evaluation (`nomad_evaluate`):**
@@ -117,7 +123,7 @@ This renders numbered visual badges matching the snapshot references (`[1]`, `[2
 > - `mode: "stability"`: Waits for ongoing DOM mutation bursts to quiet down (great after clicks, modal opens, or accordion transitions). It settles once active churn stops; it does not wait for delayed future timers.
 > - `mode: "selector"`: Best for async UI renders or API fetches — returns immediately once the target node mounts in the DOM. Automatically pierces open Shadow DOM roots and nested same-origin frames.
 > - `mode: "networkidle"`: Best for data-heavy SPAs that perform background fetch/XHR queries before rendering content. Waits until in-flight requests settle for 500ms (for pages with recurring polling intervals like `setInterval(fetch, 200ms)`, use `stability` or `selector` instead).
-> - `mode: "navigation"` or `mode: "url"`: Best when awaiting full-page redirects or SPA history transitions.
+> - `mode: "navigation"` or `mode: "url"`: Best when awaiting full-page redirects or SPA history transitions. Matches against both raw and percent-decoded URLs (e.g. `Special:Search` matches `Special%3ASearch`). When called without a URL pattern, waits for active navigation loading to complete or URL to change, preventing premature returns.
 
 ---
 
@@ -160,14 +166,14 @@ For environments driving Nomad directly without MCP (e.g. `curl`, Python, Node.j
 | `POST` | `/navigate/back` | Navigate back in browser history |
 | `POST` | `/navigate/forward`| Navigate forward in browser history |
 | `POST` | `/navigate/reload` | Reload active page |
-| `GET` | `/snapshot` | Query: `limit`, `offset`, `viewportOnly=true`, `includeText=true`, `tabId` |
+| `GET` | `/snapshot` | Query: `limit`, `offset`, `viewportOnly=true`, `includeText=true`, `mode=text`, `tabId` |
 | `POST` | `/action` | Body: `{ "type": "click"|"hover"|"type"|"clear"|"press"|"selectOption"|"scroll"|"drag"|"highlight"` (alias: `action`), `"elementId"?: string`, `"selector"?: string`, ... } |
 | `POST` | `/wait` | Body: `{ "mode": "stability"|"selector"|"url"|"timeout"|"networkidle"|"navigation", "selector"?: string, "urlPattern"?: string` (supports regex or plain substring), `"quietMs"?: int, "timeoutMs"?: int }` |
 | `GET` | `/cookies` | Query: `domain` (filter by target domain), `allDomains=true`, `tabId` |
 | `POST` | `/cookies` | Body: `{ "action": "set"|"get"|"clear", "domain"?: string, "name"?: string, "value"?: string, "cookies"?: [...], "allDomains"?: bool }` |
 | `DELETE` | `/cookies` | Query / Body: `domain` (clears cookies for domain), `allDomains=true` (clears all profile cookies) |
 | `GET` / `POST` | `/screenshot` | Query / Body: `labeled=true`, `elementId=eN`, `clip=x,y,w,h` |
-| `POST` | `/evaluate` | Body: `{ "script": string }` (alias: `expression`), `world`: `"page"` \| `"isolated"` |
+| `POST` | `/evaluate` | Body: `{ "script": string }` (alias: `expression`), `world`: `"page"` \| `"isolated"` (returns structured error with `code: "SYNTAX_ERROR"|"EVAL_CSP"` on failure) |
 | `POST` | `/dialog` | Body: `{ "policy": "accept"|"dismiss", "response": string }` (alias: `promptResponse`) |
 | `GET` | `/console` | Query: `level=all|log|warn|error`, `clear=true`, `tabId` |
 | `GET` | `/network` | Query: `statusFilter=all|errors|success`, `clear=true`, `tabId` |

@@ -149,14 +149,22 @@ struct NomadActionResult: Codable {
     var obscured: Bool? = nil
     var interceptedBy: String? = nil
     var healed: Bool? = nil
+    var staleRef: Bool? = nil
+    var code: String? = nil
+    var stack: String? = nil
+    var error: String? = nil
 
-    init(success: Bool, message: String, elementId: String? = nil, obscured: Bool? = nil, interceptedBy: String? = nil, healed: Bool? = nil) {
+    init(success: Bool, message: String, elementId: String? = nil, obscured: Bool? = nil, interceptedBy: String? = nil, healed: Bool? = nil, staleRef: Bool? = nil, code: String? = nil, stack: String? = nil, error: String? = nil) {
         self.success = success
         self.message = message
         self.elementId = elementId
         self.obscured = obscured
         self.interceptedBy = interceptedBy
         self.healed = healed
+        self.staleRef = staleRef
+        self.code = code
+        self.stack = stack
+        self.error = error
     }
 }
 
@@ -170,8 +178,24 @@ enum NomadDOMScript {
     (function() {
         if (window.__nomad) return;
 
+        // Validates whether an element is truly editable for typing or clearing
+        function isTextEditable(node) {
+            if (!node) return false;
+            if (node.isContentEditable) return true;
+            var t = node.tagName ? node.tagName.toLowerCase() : '';
+            if (t === 'textarea') return !node.readOnly && !node.disabled;
+            if (t === 'input') {
+                var it = (node.type || 'text').toLowerCase();
+                var nonTextTypes = ['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file', 'range', 'color', 'hidden'];
+                if (nonTextTypes.indexOf(it) !== -1) return false;
+                return !node.readOnly && !node.disabled;
+            }
+            return false;
+        }
+
         window.__nomad = {
             elements: {},
+            isTextEditable: isTextEditable,
 
             // Viewport-relative bounding rect accounting for parent frame offsets
             getElementViewportRect: function(element) {
@@ -627,7 +651,7 @@ enum NomadDOMScript {
             },
 
             // Resolves a replacement node for a stale reference when DOM changes occurred without intermediate snapshot
-            selfHealElement: function(targetId) {
+            selfHealElement: function(targetId, action) {
                 if (!targetId) return null;
                 var oldEl = (this.elements && this.elements[targetId]) || null;
                 var sig = (this.elementSignatures && this.elementSignatures[targetId]) || null;
@@ -643,18 +667,45 @@ enum NomadDOMScript {
                 var role = (sig && sig.role) || (oldEl && oldEl.getAttribute && oldEl.getAttribute('role')) || null;
                 var className = (sig && sig.className) || (oldEl && oldEl.className && typeof oldEl.className === 'string' ? oldEl.className.trim() : null);
 
+                var requiresInput = (action === 'type' || action === 'clear');
+                var requiresSelect = (action === 'selectoption');
+
+                // If the action requires a text-editable control, but the element signature was snapshotted
+                // as a non-editable tag (e.g. <img>, <a>, <p>, <h1>), NEVER attempt to heal it into an input!
+                if (requiresInput && tag) {
+                    var isSigEditable = (tag === 'input' || tag === 'textarea' || (sig && sig.isContentEditable));
+                    if (!isSigEditable) return null;
+                    if (tag === 'input' && type) {
+                        var nonText = ['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file', 'range', 'color', 'hidden'];
+                        if (nonText.indexOf(type.toLowerCase()) !== -1) return null;
+                    }
+                }
+                if (requiresSelect && tag && tag !== 'select') {
+                    return null;
+                }
+
                 // Fast path 1: query by element ID
                 if (domId) {
                     try {
                         var byId = document.getElementById(domId);
-                        if (byId && this.isNodeConnected(byId)) return byId;
+                        if (byId && this.isNodeConnected(byId)) {
+                            if ((!requiresInput || isTextEditable(byId)) &&
+                                (!requiresSelect || byId.tagName.toLowerCase() === 'select')) {
+                                return byId;
+                            }
+                        }
                     } catch(e) {}
                 }
                 // Fast path 2: query by data-testid
                 if (testId) {
                     try {
                         var byTest = document.querySelector('[data-testid="' + CSS.escape(testId) + '"]');
-                        if (byTest && this.isNodeConnected(byTest)) return byTest;
+                        if (byTest && this.isNodeConnected(byTest)) {
+                            if ((!requiresInput || isTextEditable(byTest)) &&
+                                (!requiresSelect || byTest.tagName.toLowerCase() === 'select')) {
+                                return byTest;
+                            }
+                        }
                     } catch(e) {}
                 }
                 // Fast path 3: query by name and tag
@@ -662,7 +713,13 @@ enum NomadDOMScript {
                     try {
                         var byName = document.querySelectorAll(tag + '[name="' + CSS.escape(name) + '"]');
                         for (var ni = 0; ni < byName.length; ni++) {
-                            if (this.isNodeConnected(byName[ni])) return byName[ni];
+                            var bn = byName[ni];
+                            if (this.isNodeConnected(bn)) {
+                                if ((!requiresInput || isTextEditable(bn)) &&
+                                    (!requiresSelect || bn.tagName.toLowerCase() === 'select')) {
+                                    return bn;
+                                }
+                            }
                         }
                     } catch(e) {}
                 }
@@ -671,19 +728,29 @@ enum NomadDOMScript {
                     try {
                         var byAria = document.querySelectorAll(tag + '[aria-label="' + CSS.escape(ariaLabel) + '"]');
                         for (var ai = 0; ai < byAria.length; ai++) {
-                            if (this.isNodeConnected(byAria[ai])) return byAria[ai];
+                            var ba = byAria[ai];
+                            if (this.isNodeConnected(ba)) {
+                                if ((!requiresInput || isTextEditable(ba)) &&
+                                    (!requiresSelect || ba.tagName.toLowerCase() === 'select')) {
+                                    return ba;
+                                }
+                            }
                         }
                     } catch(e) {}
                 }
 
                 // Scored search across candidates in the live document
-                var selector = tag || 'a, button, input, textarea, select, details, summary, [role="button"], [role="link"], [contenteditable="true"]';
+                var selector = tag || (requiresInput ? 'input, textarea, [contenteditable="true"]' : (requiresSelect ? 'select' : 'a, button, input, textarea, select, details, summary, [role="button"], [role="link"], [contenteditable="true"]'));
                 var candidates = [];
                 try {
                     var found = document.querySelectorAll(selector);
                     for (var ci = 0; ci < found.length; ci++) {
                         var cand = found[ci];
-                        if (this.isNodeConnected(cand)) candidates.push(cand);
+                        if (this.isNodeConnected(cand)) {
+                            if (requiresInput && !isTextEditable(cand)) continue;
+                            if (requiresSelect && cand.tagName.toLowerCase() !== 'select') continue;
+                            candidates.push(cand);
+                        }
                     }
                 } catch(e) {}
 
@@ -725,49 +792,67 @@ enum NomadDOMScript {
                     return bestEl;
                 }
 
-                // Fallback: positional healing for eN references
-                if (typeof targetId === 'string' && /^e\\d+$/i.test(targetId)) {
-                    var n = parseInt(targetId.substring(1), 10);
-                    if (!isNaN(n) && n > 0 && n <= candidates.length) {
-                        var posCand = candidates[n - 1];
-                        if (posCand && (!tag || posCand.tagName.toLowerCase() === tag)) {
-                            return posCand;
-                        }
-                    }
-                }
-
+                // Positional guessing (candidates[n - 1]) is intentionally removed.
+                // Ref-shifts that lack semantic signature match must fail cleanly with STALE_REF.
                 return null;
             },
 
             // 2. Dispatches synthetic and realistic user actions
             performAction: function(actionObj) {
-                var action = (actionObj.action || actionObj.type || '').trim().toLowerCase();
-                var targetId = actionObj.target || actionObj.elementId || actionObj.selector;
-                var el = null;
-                var wasHealed = false;
+                try {
+                    var action = (actionObj.action || actionObj.type || '').trim().toLowerCase();
+                    var targetId = actionObj.target || actionObj.elementId || actionObj.selector;
+                    var el = null;
+                    var wasHealed = false;
 
-                if (!action) {
-                    return { success: false, message: "Missing required 'type' or 'action' field" };
-                }
-
-                if (targetId) {
-                    if (this.elements && this.elements[targetId] && this.isNodeConnected(this.elements[targetId])) {
-                        el = this.elements[targetId];
-                    } else {
-                        el = this.findInTree(document, targetId);
-                        if (el && this.elements) this.elements[targetId] = el;
+                    if (!action) {
+                        return { success: false, code: 'INVALID_ACTION', message: "Missing required 'type' or 'action' field" };
                     }
 
-                    // In-place self-healing for stale node references
-                    if (!el && this.selfHealElement) {
-                        var healed = this.selfHealElement(targetId);
+                    if (targetId) {
+                        if (this.elements && this.elements[targetId] && this.isNodeConnected(this.elements[targetId])) {
+                            el = this.elements[targetId];
+                        } else {
+                            el = this.findInTree(document, targetId);
+                            if (el && this.elements) this.elements[targetId] = el;
+                        }
+
+                        // Validate compatibility with the requested action
+                        var sig = (this.elementSignatures && this.elementSignatures[targetId]) || null;
+                        var isIncompatible = false;
+                        if (el) {
+                            var elTag = el.tagName ? el.tagName.toLowerCase() : '';
+                            if (action === 'type' || action === 'clear') {
+                                if (!isTextEditable(el)) isIncompatible = true;
+                            } else if (action === 'selectoption') {
+                                if (elTag !== 'select') isIncompatible = true;
+                            }
+                        }
+
+                    // In-place self-healing for stale node references or incompatible nodes
+                    if ((!el || isIncompatible) && this.selfHealElement) {
+                        var healed = this.selfHealElement(targetId, action);
                         if (healed) {
                             el = healed;
                             wasHealed = true;
+                            isIncompatible = false;
                             if (!this.elements) this.elements = {};
                             this.elements[targetId] = el;
                             try { el.setAttribute('data-nomad-id', targetId); } catch(e) {}
                         }
+                    }
+
+                    // If still incompatible after healing attempt, explicitly report STALE_REF
+                    if (el && isIncompatible) {
+                        var currentDesc = '<' + (el.tagName ? el.tagName.toLowerCase() : 'element') + '>';
+                        var expectedDesc = (sig && sig.tag) ? '<' + sig.tag + '>' : 'an editable control';
+                        return {
+                            success: false,
+                            staleRef: true,
+                            code: 'STALE_REF',
+                            message: "Stale element reference '" + targetId + "': target was snapshotted as " + expectedDesc + " but currently resolves to " + currentDesc + " which is incompatible with '" + action + "'. The DOM shifted or reloaded. Please call nomad_snapshot to get fresh element refs.",
+                            elementId: targetId
+                        };
                     }
                 }
 
@@ -777,7 +862,13 @@ enum NomadDOMScript {
                 }
 
                 if (targetId && !el && action !== 'scroll' && action !== 'press') {
-                    return { success: false, message: 'Target element ' + targetId + ' not found or no longer in DOM.', elementId: targetId };
+                    return {
+                        success: false,
+                        staleRef: true,
+                        code: 'STALE_REF',
+                        message: "Target element '" + targetId + "' not found or no longer in DOM. Please re-snapshot the page.",
+                        elementId: targetId
+                    };
                 }
 
                 var actionOutcome = (function(self) {
@@ -810,7 +901,7 @@ enum NomadDOMScript {
                                     var cxC = Math.round(rectC.left + rectC.width / 2);
                                     var cyC = Math.round(rectC.top + rectC.height / 2);
                                     var topEl = elDoc.elementFromPoint(cxC, cyC);
-                                    if (topEl && topEl !== el && !el.contains(topEl)) {
+                                    if (topEl && topEl !== el && !el.contains(topEl) && !topEl.contains(el)) {
                                         var rootNode = el.getRootNode ? el.getRootNode() : null;
                                         var host = (rootNode && rootNode.host) ? rootNode.host : null;
                                         if (topEl !== host && (!host || !host.contains(topEl))) {
@@ -877,9 +968,7 @@ enum NomadDOMScript {
 
                     case 'clear':
                         if (!el) return { success: false, message: 'No target element for clear action' };
-                        var clearTag = el.tagName ? el.tagName.toUpperCase() : '';
-                        var isInputClear = (clearTag === 'INPUT' || clearTag === 'TEXTAREA');
-                        if (!isInputClear && !el.isContentEditable) {
+                        if (!isTextEditable(el)) {
                             return { success: false, message: 'Target element <' + el.tagName.toLowerCase() + '> is not an input or editable element' };
                         }
                         if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
@@ -896,25 +985,25 @@ enum NomadDOMScript {
                             } catch(e) {
                                 el.innerText = '';
                             }
-                            el.dispatchEvent(new elWinC.Event('input', { bubbles: true }));
+                            el.dispatchEvent(new (elWinC.Event || Event)('input', { bubbles: true }));
                             return { success: true, message: 'Cleared value in ' + targetId, elementId: targetId };
                         }
+                        var clearTag = el.tagName ? el.tagName.toUpperCase() : '';
                         try {
                             var protoC = (clearTag === 'TEXTAREA') ? ((elWinC.HTMLTextAreaElement && elWinC.HTMLTextAreaElement.prototype) || window.HTMLTextAreaElement.prototype) : ((elWinC.HTMLInputElement && elWinC.HTMLInputElement.prototype) || window.HTMLInputElement.prototype);
-                            var setterC = Object.getOwnPropertyDescriptor(protoC, 'value')?.set;
+                            var descC = Object.getOwnPropertyDescriptor(protoC, 'value');
+                            var setterC = descC && descC.set;
                             if (setterC) { setterC.call(el, ''); } else { el.value = ''; }
                         } catch(e) {
                             el.value = '';
                         }
-                        el.dispatchEvent(new elWinC.Event('input', { bubbles: true }));
-                        el.dispatchEvent(new elWinC.Event('change', { bubbles: true }));
+                        el.dispatchEvent(new (elWinC.Event || Event)('input', { bubbles: true }));
+                        el.dispatchEvent(new (elWinC.Event || Event)('change', { bubbles: true }));
                         return { success: true, message: 'Cleared value in ' + targetId, elementId: targetId };
 
                     case 'type':
                         if (!el) return { success: false, message: 'No target element for type action' };
-                        var typeTag = el.tagName ? el.tagName.toUpperCase() : '';
-                        var isInputType = (typeTag === 'INPUT' || typeTag === 'TEXTAREA');
-                        if (!isInputType && !el.isContentEditable) {
+                        if (!isTextEditable(el)) {
                             return { success: false, message: 'Target element <' + el.tagName.toLowerCase() + '> is not editable or an input control' };
                         }
                         if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
@@ -922,43 +1011,52 @@ enum NomadDOMScript {
                         }
                         el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
                         try { el.focus(); } catch(e) {}
-                        var textToType = actionObj.text || '';
+                        var typeTag = el.tagName ? el.tagName.toUpperCase() : '';
+                        var hasExplicitText = actionObj.text !== undefined && actionObj.text !== null;
+                        var textToType = hasExplicitText ? String(actionObj.text) : '';
+                        var shouldUpdateValue = hasExplicitText && (textToType.length > 0 || actionObj.clear === true || !actionObj.submit);
                         var elDocT = el.ownerDocument || document;
                         var elWinT = elDocT.defaultView || window;
                         if (el.isContentEditable) {
-                            try {
-                                elDocT.execCommand('selectAll', false, null);
-                                elDocT.execCommand('insertText', false, textToType);
-                            } catch(e) {
-                                el.innerText = textToType;
+                            if (shouldUpdateValue) {
+                                try {
+                                    elDocT.execCommand('selectAll', false, null);
+                                    elDocT.execCommand('insertText', false, textToType);
+                                } catch(e) {
+                                    el.innerText = textToType;
+                                }
+                                el.dispatchEvent(new (elWinT.Event || Event)('input', { bubbles: true }));
                             }
-                            el.dispatchEvent(new elWinT.Event('input', { bubbles: true }));
                             if (actionObj.submit) {
-                                var cEnterDown = new elWinT.KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
-                                var cEnterUp = new elWinT.KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                                var cEnterDown = new (elWinT.KeyboardEvent || KeyboardEvent)('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                                var cEnterUp = new (elWinT.KeyboardEvent || KeyboardEvent)('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
                                 el.dispatchEvent(cEnterDown);
                                 el.dispatchEvent(cEnterUp);
                             }
-                            return { success: true, message: 'Typed into ' + (targetId || 'element'), elementId: targetId };
+                            var ceMsg = shouldUpdateValue ? ('Typed into ' + (targetId || 'element')) : ('Submitted ' + (targetId || 'element'));
+                            return { success: true, message: ceMsg, elementId: targetId };
                         }
-                        try {
-                            // React 16+ controlled component compatibility
-                            var protoType = (typeTag === 'TEXTAREA') ? ((elWinT.HTMLTextAreaElement && elWinT.HTMLTextAreaElement.prototype) || window.HTMLTextAreaElement.prototype) : ((elWinT.HTMLInputElement && elWinT.HTMLInputElement.prototype) || window.HTMLInputElement.prototype);
-                            var setterType = Object.getOwnPropertyDescriptor(protoType, 'value')?.set;
-                            if (setterType) { setterType.call(el, textToType); } else { el.value = textToType; }
-                        } catch(e) {
-                            el.value = textToType;
+                        if (shouldUpdateValue) {
+                            try {
+                                // React 16+ controlled component compatibility
+                                var protoType = (typeTag === 'TEXTAREA') ? ((elWinT.HTMLTextAreaElement && elWinT.HTMLTextAreaElement.prototype) || window.HTMLTextAreaElement.prototype) : ((elWinT.HTMLInputElement && elWinT.HTMLInputElement.prototype) || window.HTMLInputElement.prototype);
+                                var descType = Object.getOwnPropertyDescriptor(protoType, 'value');
+                                var setterType = descType && descType.set;
+                                if (setterType) { setterType.call(el, textToType); } else { el.value = textToType; }
+                            } catch(e) {
+                                el.value = textToType;
+                            }
+                            el.dispatchEvent(new (elWinT.Event || Event)('input', { bubbles: true }));
                         }
-                        el.dispatchEvent(new elWinT.Event('input', { bubbles: true }));
                         if (actionObj.submit || actionObj.blur || actionObj.change) {
-                            el.dispatchEvent(new elWinT.Event('change', { bubbles: true }));
+                            el.dispatchEvent(new (elWinT.Event || Event)('change', { bubbles: true }));
                         }
                         if (actionObj.blur) {
                             try { el.blur(); } catch(e) {}
                         }
                         if (actionObj.submit) {
-                            var enterDown = new elWinT.KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
-                            var enterUp = new elWinT.KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                            var enterDown = new (elWinT.KeyboardEvent || KeyboardEvent)('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                            var enterUp = new (elWinT.KeyboardEvent || KeyboardEvent)('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
                             el.dispatchEvent(enterDown);
                             el.dispatchEvent(enterUp);
                             var f = el.form || (el.closest ? el.closest('form') : null);
@@ -969,7 +1067,8 @@ enum NomadDOMScript {
                                 } catch(e) {}
                             }
                         }
-                        return { success: true, message: 'Typed into ' + (targetId || 'element'), elementId: targetId };
+                        var inputMsg = shouldUpdateValue ? ('Typed into ' + (targetId || 'element')) : ('Submitted ' + (targetId || 'element'));
+                        return { success: true, message: inputMsg, elementId: targetId };
 
                     case 'drag':
                         if (!el) return { success: false, message: 'No source element for drag action' };
@@ -1142,7 +1241,19 @@ enum NomadDOMScript {
                 actionOutcome.healed = true;
             }
             return actionOutcome;
-        },
+        } catch (actionErr) {
+            var errMsg = (actionErr && actionErr.message) ? actionErr.message : String(actionErr);
+            var errStack = (actionErr && actionErr.stack) ? actionErr.stack : null;
+            return {
+                success: false,
+                code: 'ACTION_JS_ERROR',
+                error: errMsg,
+                message: "Action '" + (actionObj && (actionObj.action || actionObj.type)) + "' threw JavaScript error: " + errMsg,
+                stack: errStack,
+                elementId: (actionObj && (actionObj.target || actionObj.elementId || actionObj.selector)) || null
+            };
+        }
+    },
 
             // 3. Visual Element Highlighter for DevX & Inspection
             showHighlight: function(el) {
@@ -1243,7 +1354,7 @@ enum NomadDOMScript {
                             var added = (mutations ? mutations.length : 1);
                             recordMutation(added);
                         });
-                        var targetNode = document.documentElement || document;
+                        var targetNode = document;
                         observer.observe(targetNode, {
                             childList: true,
                             subtree: true,
@@ -1268,7 +1379,7 @@ enum NomadDOMScript {
                         // Dynamic cadence detection: if recurring periodic mutations occur (e.g. 50ms churn with timer jitter),
                         // require silence that strictly exceeds the observed interval cadence to avoid false-settling mid-churn.
                         var requiredQuiet = quiet;
-                        if (recentMutationTimes.length >= 3) {
+                        if (recentMutationTimes.length >= 2) {
                             var intervals = [];
                             for (var k = 1; k < recentMutationTimes.length; k++) {
                                 var diff = recentMutationTimes[k] - recentMutationTimes[k - 1];
@@ -1276,7 +1387,7 @@ enum NomadDOMScript {
                                     intervals.push(diff);
                                 }
                             }
-                            if (intervals.length >= 2) {
+                            if (intervals.length >= 1) {
                                 var sum = 0;
                                 var maxInt = 0;
                                 for (var m = 0; m < intervals.length; m++) {
@@ -1351,36 +1462,49 @@ extension Tab {
         guard let actionJSON = String(data: actionData, encoding: .utf8) else {
             throw NSError(domain: "NomadAgent", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to encode action JSON"])
         }
-        let resultString = try await webView.evaluateJavaScript("JSON.stringify(window.__nomad.performAction(\(actionJSON)))") as? String ?? "{}"
-        guard let resultData = resultString.data(using: .utf8) else {
-            throw NSError(domain: "NomadAgent", code: -3, userInfo: [NSLocalizedDescriptionKey: "Failed to parse action result JSON"])
+        do {
+            let resultString = try await webView.evaluateJavaScript("JSON.stringify(window.__nomad.performAction(\(actionJSON)))") as? String ?? "{}"
+            guard let resultData = resultString.data(using: .utf8) else {
+                return NomadActionResult(success: false, message: "Failed to parse action result JSON", elementId: action.target, code: "ACTION_PARSE_ERROR")
+            }
+            return try JSONDecoder().decode(NomadActionResult.self, from: resultData)
+        } catch let decodeErr as DecodingError {
+            return NomadActionResult(success: false, message: "Failed to decode action result: \(decodeErr.localizedDescription)", elementId: action.target, code: "ACTION_DECODE_ERROR")
+        } catch {
+            return NomadActionResult(
+                success: false,
+                message: "JavaScript evaluation failed: \(error.localizedDescription)",
+                elementId: action.target,
+                code: "ACTION_EVALUATION_ERROR",
+                error: error.localizedDescription
+            )
         }
-        return try JSONDecoder().decode(NomadActionResult.self, from: resultData)
     }
 
     /// Waits for DOM mutation quiescence (stability) on the active page.
     @MainActor
     func waitForStability(quietMs: Int = 250, timeoutMs: Int = 5000) async throws -> [String: Any] {
-        let start = Date()
-        let timeoutSeconds = Double(timeoutMs) / 1000.0
+        let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
         // 1. Wait for webView provisional or active navigation to complete
-        while webView.isLoading && Date().timeIntervalSince(start) < timeoutSeconds {
+        while webView.isLoading && Date() < deadline {
             try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
         }
 
         // 2. Wait for HTML document to finish parsing
-        while Date().timeIntervalSince(start) < timeoutSeconds {
+        while Date() < deadline {
             let readyState = (try? await webView.evaluateJavaScript("document.readyState")) as? String
             if readyState != "loading" {
                 break
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
-        let elapsed = Int(Date().timeIntervalSince(start) * 1000.0)
-        let remainingTimeout = max(50, timeoutMs - elapsed)
-        if remainingTimeout <= 50 && timeoutMs > 50 {
+
+        let remainingSeconds = deadline.timeIntervalSinceNow
+        if remainingSeconds <= 0.05 && timeoutMs > 50 {
             return ["success": false, "reason": "timeout", "message": "Exceeded max wait of \(timeoutMs)ms (page still loading)"]
         }
+        let remainingTimeoutMs = max(50, Int(remainingSeconds * 1000.0))
+
         await ensureNomadScriptInjected()
         let script = """
         return await (async () => {
@@ -1393,7 +1517,7 @@ extension Tab {
         return try await withThrowingTaskGroup(of: [String: Any].self) { group in
             group.addTask { @MainActor in
                 try await withCheckedThrowingContinuation { continuation in
-                    self.webView.callAsyncJavaScript(script, arguments: ["quietMs": quietMs, "timeoutMs": remainingTimeout], in: nil, in: .page) { result in
+                    self.webView.callAsyncJavaScript(script, arguments: ["quietMs": quietMs, "timeoutMs": remainingTimeoutMs], in: nil, in: .page) { result in
                         switch result {
                         case .success(let val):
                             if let dict = val as? [String: Any] {
@@ -1413,7 +1537,8 @@ extension Tab {
                 }
             }
             group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(remainingTimeout + 800) * 1_000_000)
+                let sleepTime = max(0.1, remainingSeconds + 0.3)
+                try await Task.sleep(nanoseconds: UInt64(sleepTime * 1_000_000_000))
                 return ["success": false, "reason": "timeout", "message": "Exceeded max wait of \(timeoutMs)ms"]
             }
             let firstResult = try await group.next()!
