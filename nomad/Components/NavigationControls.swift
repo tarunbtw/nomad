@@ -13,6 +13,7 @@ struct NavigationControls: View {
     @ObservedObject var store: BrowserStore
     @ObservedObject var settings: SettingsStore = SettingsStore.shared
     @ObservedObject private var downloadManager = DownloadManager.shared
+    @ObservedObject private var updater = Updater.shared
     @State private var isShowingExtensionsMenu: Bool = false
     @State private var isShowingDownloadsMenu: Bool = false
 
@@ -166,6 +167,25 @@ struct NavigationControls: View {
             }
             .buttonStyle(.plain)
             .help("Settings (nomad://settings, ⌘,)")
+
+            if case .ready(let release) = updater.stage {
+                Button(action: { updater.relaunch() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise.circle.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.green)
+                        Text("Restart")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.primary)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.green.opacity(0.14), in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.green.opacity(0.3), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .help("Nomad \(release.version) is ready to install. Click to restart.")
+            }
         }
         .foregroundStyle(.primary)
     }

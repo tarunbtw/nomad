@@ -25,6 +25,11 @@ struct nomadApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 780)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates...") {
+                    Updater.shared.checkByHand()
+                }
+            }
             CommandGroup(replacing: .printItem) {
                 // Replaces standard Page Setup (⇧⌘P) so ⇧⌘P belongs directly to Picture-in-Picture
                 Button("Print...") {
@@ -43,6 +48,10 @@ struct nomadApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Updater.shared.checkIfDue()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         FloatingVideoManager.shared.land()
         NomadAgentServer.shared.stop()

@@ -20,6 +20,7 @@ struct SettingsView: View {
         nonmutating set { settings.activeSection = newValue.rawValue }
     }
     @State private var hexInputText: String = ""
+    @ObservedObject private var updater = Updater.shared
     @ObservedObject private var extensionManager = ExtensionManager.shared
     @ObservedObject private var historyStore = HistoryStore.shared
     @State private var historySearchQuery: String = ""
@@ -487,6 +488,110 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                }
+            }
+
+            // Software Updates
+            card(title: "Software Updates") {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .center) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text("Nomad \(Updater.currentVersion)")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text("Build \(Updater.currentBuild)")
+                                    .font(.system(size: 11, weight: .regular))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 1)
+                                    .background(Color.primary.opacity(0.06), in: Capsule())
+                            }
+
+                            switch updater.stage {
+                            case .none:
+                                Text(updater.statusMessage.isEmpty ? "Nomad is up to date" : updater.statusMessage)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            case .checking:
+                                HStack(spacing: 5) {
+                                    ProgressView().controlSize(.mini)
+                                    Text("Checking for updates...")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                }
+                            case .fetching(let release, let progress):
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text("Downloading Nomad \(release.version)...")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        Text("\(Int(progress * 100))%")
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundStyle(settings.accentColor)
+                                    }
+                                    ProgressView(value: progress)
+                                        .progressViewStyle(.linear)
+                                }
+                            case .ready(let release):
+                                Text("Nomad \(release.version) is ready — restart to use it")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.green)
+                            case .waiting(let release):
+                                Text("Nomad \(release.version) is available")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(settings.accentColor)
+                            case .failed(let error):
+                                Text(error)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.red)
+                            }
+                        }
+
+                        Spacer()
+
+                        switch updater.stage {
+                        case .ready:
+                            Button("Relaunch to Update") {
+                                updater.relaunch()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(settings.accentColor)
+                            .controlSize(.small)
+                        case .waiting:
+                            Button("Install Update") {
+                                updater.install()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(settings.accentColor)
+                            .controlSize(.small)
+                        case .fetching:
+                            EmptyView()
+                        default:
+                            Button("Check for Updates") {
+                                updater.checkByHand()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(updater.checking)
+                        }
+                    }
+
+                    Divider().opacity(0.12)
+
+                    Toggle(isOn: Binding(
+                        get: { updater.autoInstall },
+                        set: { updater.autoInstall = $0 }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Automatically Download and Prepare Updates")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("Checks hourly and downloads releases in the background so updates are ready when you restart.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
                 }
             }
         }
