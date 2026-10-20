@@ -62,11 +62,11 @@ Title: Todo App
 [e4] <li "Buy milk">
 [e5] <a href="/login">Sign In</a> (offscreen)
 ```
-For dense pages, tune the budget with `limit` (default 100) or `offset`, or request text-only summary:
+Default mode returns the token-efficient semantic perception markdown (~400–2,000 tokens for 100 elements; recommend `limit: 40-50` for ~400–800 tokens). To receive the full JSON AST array of elements, pass `mode: 'json'`:
 ```json
 nomad_snapshot({ "limit": 40, "offset": 0, "viewportOnly": true, "includeText": true })
-// Or token-efficient summary (~600–1,200 tokens, omits full elements array):
-nomad_snapshot({ "mode": "text" })
+// Or full JSON AST element array:
+nomad_snapshot({ "mode": "json" })
 ```
 
 > [!NOTE]

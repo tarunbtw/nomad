@@ -486,7 +486,6 @@ final class NomadAgentServer: ObservableObject {
             sendJSON(connection: connection, object: ["success": true, "closedTabId": id.uuidString, "tabsCount": store.tabs.count], origin: origin)
 
         case ("POST", "/navigate"):
-            guard let activeTab = requireTab() else { return }
             guard let bodyData = bodyData, !bodyData.isEmpty else {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing body in /navigate\"}", origin: origin)
                 return
@@ -495,6 +494,8 @@ final class NomadAgentServer: ObservableObject {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in request body\"}", origin: origin)
                 return
             }
+            let tid = (json["tabId"] as? String) ?? queryItem("tabId")
+            guard let activeTab = requireTab(id: tid) else { return }
             let action = (json["action"] as? String)?.lowercased()
             switch action {
             case "back", "forward", "reload":
@@ -552,15 +553,15 @@ final class NomadAgentServer: ObservableObject {
             }
 
         case ("POST", "/navigate/back"):
-            guard let activeTab = requireTab() else { return }
+            guard let activeTab = requireTab(id: queryItem("tabId")) else { return }
             handleNavAction("back", tab: activeTab)
 
         case ("POST", "/navigate/forward"):
-            guard let activeTab = requireTab() else { return }
+            guard let activeTab = requireTab(id: queryItem("tabId")) else { return }
             handleNavAction("forward", tab: activeTab)
 
         case ("POST", "/navigate/reload"):
-            guard let activeTab = requireTab() else { return }
+            guard let activeTab = requireTab(id: queryItem("tabId")) else { return }
             handleNavAction("reload", tab: activeTab)
 
         case ("POST", "/wait"):
@@ -674,6 +675,19 @@ final class NomadAgentServer: ObservableObject {
                 let initialUrl = activeTab.url?.absoluteString ?? ""
                 var didStartNavigating = activeTab.isLoading
                 let startTime = Date()
+
+                // If awaiting general navigation (no URL pattern) and the tab is already not loading:
+                // Check if a navigation finished recently (< 3.0s ago) with no subsequent action dispatched.
+                if expectedPattern.isEmpty && !activeTab.isLoading {
+                    if let finish = activeTab.lastNavigationFinishTime,
+                       Date().timeIntervalSince(finish) < 3.0,
+                       (activeTab.lastActionTime == nil || activeTab.lastActionTime! <= finish) {
+                        let curUrl = activeTab.url?.absoluteString ?? ""
+                        sendJSON(connection: connection, object: ["success": true, "message": "Navigation finished", "url": curUrl], origin: origin)
+                        return
+                    }
+                }
+
                 while Date().timeIntervalSince(startTime) < (Double(timeoutMs) / 1000.0) {
                     try? await Task.sleep(nanoseconds: 50_000_000)
                     let curUrl = activeTab.url?.absoluteString ?? ""
@@ -698,9 +712,13 @@ final class NomadAgentServer: ObservableObject {
                         }
                     } else {
                         // When awaiting general navigation without a specific URL pattern,
-                        // require that the tab was actively loading and completed, or that the URL changed away from initialUrl.
+                        // succeed if:
+                        // 1. Tab was observed loading and now completed, OR
+                        // 2. URL changed away from initialUrl and loading is false, OR
+                        // 3. Navigation finished after wait call was received (lastNavigationFinishTime >= startTime)
                         let urlChanged = (!initialUrl.isEmpty && curUrl != initialUrl)
-                        if (didStartNavigating || urlChanged) && !activeTab.isLoading {
+                        let finishedAfterStart = (activeTab.lastNavigationFinishTime != nil && activeTab.lastNavigationFinishTime! >= startTime)
+                        if (didStartNavigating || urlChanged || finishedAfterStart) && !activeTab.isLoading {
                             sendJSON(connection: connection, object: ["success": true, "message": "Navigation finished", "url": curUrl], origin: origin)
                             return
                         }
@@ -718,7 +736,7 @@ final class NomadAgentServer: ObservableObject {
             }
 
         case ("GET", "/cookies"):
-            guard let activeTab = requireTab() else { return }
+            guard let activeTab = requireTab(id: queryItem("tabId")) else { return }
             let cookieStore = activeTab.webView.configuration.websiteDataStore.httpCookieStore
             let allCookies = await cookieStore.allCookies()
             let domainParam = queryItem("domain")?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -746,7 +764,6 @@ final class NomadAgentServer: ObservableObject {
             sendJSON(connection: connection, object: ["cookies": matched, "domain": host, "allDomains": allDomains], origin: origin)
 
         case ("POST", "/cookies"):
-            guard let activeTab = requireTab() else { return }
             guard let bodyData = bodyData, !bodyData.isEmpty else {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing cookie JSON body\"}", origin: origin)
                 return
@@ -755,6 +772,8 @@ final class NomadAgentServer: ObservableObject {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in cookie request body\"}", origin: origin)
                 return
             }
+            let tid = (json["tabId"] as? String) ?? queryItem("tabId")
+            guard let activeTab = requireTab(id: tid) else { return }
 
             let action = (json["action"] as? String)?.lowercased()
             let allDomains = queryBool("allDomains") || (json["allDomains"] as? Bool == true)
@@ -836,11 +855,12 @@ final class NomadAgentServer: ObservableObject {
             sendJSON(connection: connection, object: ["success": true, "setCount": setCount], origin: origin)
 
         case ("DELETE", "/cookies"):
-            guard let activeTab = requireTab() else { return }
+            let json = (bodyData != nil && !bodyData!.isEmpty) ? (try? JSONSerialization.jsonObject(with: bodyData!)) as? [String: Any] : nil
+            let tid = (json?["tabId"] as? String) ?? queryItem("tabId")
+            guard let activeTab = requireTab(id: tid) else { return }
             var allDomains = queryBool("allDomains")
             var targetDomain = queryItem("domain")?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let bodyData = bodyData, !bodyData.isEmpty,
-               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
+            if let json = json {
                 if let bAll = json["allDomains"] as? Bool {
                     allDomains = allDomains || bAll
                 }
@@ -867,7 +887,16 @@ final class NomadAgentServer: ObservableObject {
             }
             do {
                 let snapshot = try await activeTab.getSemanticTree(limit: limit, offset: offset, viewportOnly: viewportOnly, includeText: includeText)
-                if mode == "text" || mode == "summary" {
+                if mode == "json" || mode == "full" {
+                    var fullSnapshot = snapshot
+                    // Compute accurate full token estimate including the elements array
+                    let rawData = try JSONEncoder().encode(snapshot)
+                    let fullTokens = max(1, Int(ceil(Double(rawData.count) / 4.0)))
+                    fullSnapshot.tokenEstimate = fullTokens
+                    let data = try JSONEncoder().encode(fullSnapshot)
+                    sendRaw(connection: connection, contentType: "application/json; charset=utf-8", data: data, origin: origin)
+                } else {
+                    // Default perception mode (mode == nil, "text", or "summary"): compact semantic markdown
                     let textTokens = max(1, Int(ceil(Double(snapshot.summary.utf8.count) / 4.0)))
                     var resp: [String: Any] = [
                         "success": true,
@@ -878,14 +907,6 @@ final class NomadAgentServer: ObservableObject {
                     ]
                     if let te = snapshot.totalElements { resp["totalElements"] = te }
                     sendJSON(connection: connection, object: resp, origin: origin)
-                } else {
-                    var fullSnapshot = snapshot
-                    // Compute accurate full token estimate including the elements array
-                    let rawData = try JSONEncoder().encode(snapshot)
-                    let fullTokens = max(1, Int(ceil(Double(rawData.count) / 4.0)))
-                    fullSnapshot.tokenEstimate = fullTokens
-                    let data = try JSONEncoder().encode(fullSnapshot)
-                    sendRaw(connection: connection, contentType: "application/json; charset=utf-8", data: data, origin: origin)
                 }
             } catch {
                 sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}", origin: origin)

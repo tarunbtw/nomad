@@ -142,6 +142,9 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     @Published var dialogPolicy: String = "accept"
     @Published var dialogPromptResponse: String = ""
     @Published var navigationSeq: Int = 0
+    @Published var lastNavigationStartTime: Date? = nil
+    @Published var lastNavigationFinishTime: Date? = nil
+    @Published var lastActionTime: Date? = nil
     var allowNextFileNavigation: Bool = false
 
     /// Staged file URLs ready for programmatic consumption by runOpenPanelWith during agent file uploads.
@@ -303,6 +306,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     /// Loads a specific URL.
     func load(url: URL) {
         self.navigationSeq += 1
+        self.lastNavigationStartTime = Date()
         self.url = url
         self.lastNavigationError = nil
         if url.scheme == "nomad" {
@@ -686,6 +690,11 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.isLoading = loading
+                if !loading {
+                    self.lastNavigationFinishTime = Date()
+                } else {
+                    self.lastNavigationStartTime = Date()
+                }
                 ExtensionManager.shared.tabDidChange(self, properties: [.loading])
             }
         })
@@ -842,6 +851,7 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         self.allowNextFileNavigation = false
         self.isLoading = false
+        self.lastNavigationFinishTime = Date()
         if webView.magnification != 1.0 {
             webView.setMagnification(1.0, centeredAt: .zero)
         }
@@ -895,11 +905,13 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         self.networkEntries.removeAll()
+        self.lastNavigationStartTime = Date()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         self.allowNextFileNavigation = false
         self.isLoading = false
+        self.lastNavigationFinishTime = Date()
         let nsErr = error as NSError
         if !(nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled) {
             self.lastNavigationError = error.localizedDescription
@@ -917,6 +929,7 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
         }
         self.allowNextFileNavigation = false
         self.isLoading = false
+        self.lastNavigationFinishTime = Date()
         if !(nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled) {
             self.lastNavigationError = error.localizedDescription
         }

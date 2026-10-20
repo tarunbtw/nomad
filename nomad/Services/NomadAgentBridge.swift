@@ -370,15 +370,48 @@ enum NomadDOMScript {
                     } catch(e) {}
                 }
 
+                // Luhn algorithm check for payment cards
+                function isLuhnValid(val) {
+                    var digits = String(val).replace(/[\\s-]/g, '');
+                    if (!/^\\d{13,19}$/.test(digits)) return false;
+                    var sum = 0, alt = false;
+                    for (var i = digits.length - 1; i >= 0; i--) {
+                        var n = parseInt(digits.charAt(i), 10);
+                        if (alt) {
+                            n *= 2;
+                            if (n > 9) n -= 9;
+                        }
+                        sum += n;
+                        alt = !alt;
+                    }
+                    return (sum % 10 === 0);
+                }
+
+                // Payment cards, CVVs, SSNs, and sensitive tokens
+                function isSensitiveValue(val) {
+                    if (val === undefined || val === null) return false;
+                    var str = String(val).trim();
+                    if (!str) return false;
+                    var digitsOnly = str.replace(/[\\s-]/g, '');
+                    if (/^\\d{13,19}$/.test(digitsOnly)) {
+                        if (isLuhnValid(digitsOnly) || /^(?:4\\d{12}(?:\\d{3})?|5[1-5]\\d{14}|6(?:011|5\\d{2})\\d{12}|3[47]\\d{13}|3(?:0[0-5]|[68]\\d)\\d{11}|2[2-7]\\d{14})$/.test(digitsOnly)) {
+                            return true;
+                        }
+                    }
+                    if (/^\\d{3}-\\d{2}-\\d{4}$/.test(str)) return true;
+                    return false;
+                }
+
                 // Sensitive field detection (passwords, credit cards, CVVs, SSNs, tokens)
                 function isSensitiveField(el) {
                     if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') return false;
                     if (el.type === 'password') return true;
                     var hint = (el.name + ' ' + el.id + ' ' + (el.autocomplete || '') + ' ' + (el.placeholder || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
-                    var sensitive = ['card', 'cvv', 'cvc', 'ssn', 'social-security', 'secret', 'token', 'passcode', 'credit-card', 'cc-number'];
+                    var sensitive = ['card', 'cvv', 'cvc', 'ssn', 'social-security', 'secret', 'token', 'passcode', 'credit-card', 'cc-number', 'cc-csc', 'cc-exp'];
                     for (var s = 0; s < sensitive.length; s++) {
                         if (hint.indexOf(sensitive[s]) !== -1) return true;
                     }
+                    if (isSensitiveValue(el.value)) return true;
                     return false;
                 }
 
@@ -386,7 +419,7 @@ enum NomadDOMScript {
                 function getAccessibleLabel(el) {
                     try {
                         // Strict redaction of password and sensitive inputs: NEVER return value or prefilled text
-                        if (isSensitiveField(el)) {
+                        if (isSensitiveField(el) || isSensitiveValue(el.value)) {
                             if (el.getAttribute('aria-label')) return el.getAttribute('aria-label').trim();
                             if (el.placeholder) return el.placeholder.trim();
                             if (el.id) {
@@ -431,8 +464,10 @@ enum NomadDOMScript {
                         if (el.tagName === 'INPUT' && (el.type === 'submit' || el.type === 'button') && el.value) {
                             return String(el.value).trim();
                         }
-                        var fallbackVal = isSensitiveField(el) ? '' : (el.value || '');
-                        return (el.innerText || el.textContent || fallbackVal).trim();
+                        var fallbackVal = (isSensitiveField(el) || isSensitiveValue(el.value)) ? '' : (el.value || '');
+                        var rawText = (el.innerText || el.textContent || fallbackVal).trim();
+                        if (isSensitiveValue(rawText)) return '';
+                        return rawText;
                     } catch(e) {
                         return '';
                     }
@@ -494,11 +529,14 @@ enum NomadDOMScript {
                     if (style.pointerEvents === 'none' && !isInputToggle) continue;
 
                     var text = getAccessibleLabel(el).replace(/\\s+/g, ' ').substring(0, 80);
+                    if (isSensitiveValue(text)) {
+                        text = '[REDACTED]';
+                    }
                     var tag = el.tagName.toLowerCase();
                     var role = el.getAttribute('role') || tag;
                     var type = el.getAttribute('type') || null;
 
-                    var isSensitive = isSensitiveField(el);
+                    var isSensitive = isSensitiveField(el) || isSensitiveValue(el.value);
                     var val = null;
                     var hasFormValue = (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'option' || (tag === 'button' && el.type === 'submit'));
                     if (hasFormValue) {
@@ -1521,11 +1559,25 @@ extension Tab {
     func getSemanticTree(limit: Int = 100, offset: Int = 0, viewportOnly: Bool = false, includeText: Bool = true) async throws -> NomadSnapshot {
         if webView.isLoading {
             let start = Date()
-            while webView.isLoading && Date().timeIntervalSince(start) < 0.5 {
+            while webView.isLoading && Date().timeIntervalSince(start) < 0.6 {
                 try? await Task.sleep(nanoseconds: 30_000_000)
             }
         }
         await ensureNomadScriptInjected()
+
+        // Ensure DOM readiness: wait briefly if document or document.body is still loading
+        let readyScript = "Boolean(document && document.body && document.readyState !== 'loading')"
+        let isReady = (try? await webView.evaluateJavaScript(readyScript)) as? Bool ?? false
+        if !isReady {
+            let start = Date()
+            while Date().timeIntervalSince(start) < 0.4 {
+                try? await Task.sleep(nanoseconds: 30_000_000)
+                let readyNow = (try? await webView.evaluateJavaScript(readyScript)) as? Bool ?? false
+                if readyNow { break }
+            }
+            await ensureNomadScriptInjected()
+        }
+
         let opts: [String: Any] = ["limit": limit, "offset": offset, "viewportOnly": viewportOnly, "includeText": includeText]
         let optsData = (try? JSONSerialization.data(withJSONObject: opts)) ?? Data()
         let optsJSON = String(data: optsData, encoding: .utf8) ?? "{}"
@@ -1533,12 +1585,28 @@ extension Tab {
         guard let data = jsonString.data(using: .utf8) else {
             throw NSError(domain: "NomadAgent", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse snapshot JSON"])
         }
-        return try JSONDecoder().decode(NomadSnapshot.self, from: data)
+        var snapshot = try JSONDecoder().decode(NomadSnapshot.self, from: data)
+
+        // Self-healing retry: if snapshot returned 0 elements immediately following a navigation,
+        // retry once after 60ms to catch DOM construction if HTML parsing just completed.
+        if snapshot.elements.isEmpty && (self.url?.absoluteString != "about:blank") {
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            await ensureNomadScriptInjected()
+            if let retryJSON = try? await webView.evaluateJavaScript("JSON.stringify(window.__nomad.getSemanticTree(\(optsJSON)))") as? String,
+               let retryData = retryJSON.data(using: .utf8),
+               let retrySnapshot = try? JSONDecoder().decode(NomadSnapshot.self, from: retryData),
+               !retrySnapshot.elements.isEmpty {
+                snapshot = retrySnapshot
+            }
+        }
+
+        return snapshot
     }
 
     /// Dispatches a browser action (click, hover, type, clear, scroll, keypress, select, highlight) on the active page.
     @MainActor
     func performAction(_ action: NomadAction) async throws -> NomadActionResult {
+        self.lastActionTime = Date()
         if webView.isLoading {
             let start = Date()
             while webView.isLoading && Date().timeIntervalSince(start) < 0.4 {

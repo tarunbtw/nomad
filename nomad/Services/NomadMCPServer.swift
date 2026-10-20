@@ -149,6 +149,7 @@ final class NomadMCPServer {
             if let o = args["offset"] as? Int { qs.append("offset=\(o)") }
             if let v = args["viewportOnly"] as? Bool, v { qs.append("viewportOnly=true") }
             if let it = args["includeText"] as? Bool { qs.append("includeText=\(it)") }
+            if let m = args["mode"] as? String { qs.append("mode=\(m.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? m)") }
             if let t = args["tabId"] as? String { qs.append("tabId=\(t.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? t)") }
             let path = qs.isEmpty ? "/snapshot" : "/snapshot?" + qs.joined(separator: "&")
             callNomad(method: "GET", path: path) { res, err in
