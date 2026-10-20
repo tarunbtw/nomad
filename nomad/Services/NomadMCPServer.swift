@@ -202,6 +202,11 @@ final class NomadMCPServer {
                 respondTool(id: id, res: res, error: err)
             }
 
+        case "nomad_upload":
+            callNomad(method: "POST", path: "/upload", body: args) { res, err in
+                respondTool(id: id, res: res, error: err)
+            }
+
         case "nomad_wait":
             callNomad(method: "POST", path: "/wait", body: args) { res, err in
                 respondTool(id: id, res: res, error: err)
@@ -518,18 +523,23 @@ final class NomadMCPServer {
         ],
         [
             "name": "nomad_action",
-            "description": "Execute an atomic interaction in the active tab (click, hover, type, clear, press key chord, selectOption, scroll, drag, highlight). Best used with elementId from nomad_snapshot (e.g. 'e1') or CSS selector fallback. Fully compatible with React controlled components.",
+            "description": "Execute an atomic interaction in the active tab (click, hover, type, clear, press key chord, selectOption, scroll, drag, highlight, upload). Best used with elementId from nomad_snapshot (e.g. 'e1') or CSS selector fallback. Fully compatible with React controlled components.",
             "inputSchema": [
                 "type": "object",
                 "properties": [
                     "type": [
                         "type": "string",
-                        "enum": ["click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight"],
+                        "enum": ["click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight", "upload"],
                         "description": "Type of action to execute"
                     ] as [String: Any],
                     "elementId": ["type": "string", "description": "Target element ID from nomad_snapshot (e.g. 'e1', 'e2')"],
                     "selector": ["type": "string", "description": "CSS selector fallback if elementId is not used (e.g. '.todo-list li .toggle')"],
                     "text": ["type": "string", "description": "Text to enter (for 'type' action) or key name / chord (for 'press' action, e.g. 'Enter', 'Meta+A')"],
+                    "paths": [
+                        "type": "array",
+                        "items": ["type": "string"],
+                        "description": "Array of local file paths (absolute or tilde ~/...) to upload (for 'upload' action)"
+                    ] as [String: Any],
                     "optionValue": ["type": "string", "description": "Option value to choose for 'selectOption'"],
                     "optionText": ["type": "string", "description": "Option visible text to choose for 'selectOption'"],
                     "x": ["type": "number", "description": "Viewport X coordinate fallback"],
@@ -547,6 +557,24 @@ final class NomadMCPServer {
                     "tabId": ["type": "string", "description": "Optional target tab UUID"]
                 ] as [String: Any],
                 "required": ["type"],
+                "additionalProperties": false
+            ] as [String: Any]
+        ],
+        [
+            "name": "nomad_upload",
+            "description": "Upload one or more local files to a file input, upload dropzone, or label on the active page without triggering modal system dialogs.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "elementId": ["type": "string", "description": "Element reference from nomad_snapshot (e.g. 'e1') or CSS selector of the file input/button"],
+                    "paths": [
+                        "type": "array",
+                        "items": ["type": "string"],
+                        "description": "Array of local file paths (absolute or tilde ~/...) to upload"
+                    ] as [String: Any],
+                    "tabId": ["type": "string", "description": "Optional target tab UUID"]
+                ] as [String: Any],
+                "required": ["elementId", "paths"],
                 "additionalProperties": false
             ] as [String: Any]
         ],

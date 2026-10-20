@@ -143,6 +143,20 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     @Published var dialogPromptResponse: String = ""
     @Published var navigationSeq: Int = 0
     var allowNextFileNavigation: Bool = false
+
+    /// Staged file URLs ready for programmatic consumption by runOpenPanelWith during agent file uploads.
+    var stagedUploadURLs: [URL]? = nil
+    private var stagedUploadTimeoutTimer: Timer? = nil
+
+    func stageUpload(urls: [URL]) {
+        stagedUploadURLs = urls
+        stagedUploadTimeoutTimer?.invalidate()
+        stagedUploadTimeoutTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.stagedUploadURLs = nil
+            }
+        }
+    }
     
     /// The retained custom web view for this tab.
     private(set) var webView: BrowserWebView
@@ -948,6 +962,33 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
         self.lastDialog = "[Prompt: \(prompt)] -> \"\(resp)\""
         appendConsoleEntry(level: .info, message: "[Dialog Prompt] \(prompt) -> \"\(resp)\"")
         completionHandler(resp)
+    }
+
+    // MARK: - Programmatic & Interactive File Uploads
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        if let staged = self.stagedUploadURLs, !staged.isEmpty {
+            self.stagedUploadURLs = nil
+            self.stagedUploadTimeoutTimer?.invalidate()
+            self.stagedUploadTimeoutTimer = nil
+            let urlsToUpload = parameters.allowsMultipleSelection ? staged : [staged[0]]
+            appendConsoleEntry(level: .info, message: "[Upload] Programmatically injected \(urlsToUpload.count) file(s): \(urlsToUpload.map { $0.lastPathComponent }.joined(separator: ", "))")
+            completionHandler(urlsToUpload)
+            return
+        }
+
+        // Native macOS NSOpenPanel modal sheet fallback for human browsing
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.canChooseFiles = true
+        if let window = webView.window {
+            panel.beginSheetModal(for: window) { response in
+                completionHandler(response == .OK ? panel.urls : nil)
+            }
+        } else {
+            let response = panel.runModal()
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
     }
 }
 

@@ -388,7 +388,8 @@ final class NomadAgentServer: ObservableObject {
         case ("GET", "/"), ("GET", "/status"):
             let capabilities: [String: Any] = [
                 "waitModes": ["stability", "selector", "timeout", "networkidle", "navigation", "url"],
-                "actions": ["click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight"],
+                "actions": ["click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight", "upload"],
+                "upload": ["files", "paths"],
                 "screenshot": ["full", "labeled", "clip", "elementId"],
                 "evaluateWorlds": ["page", "isolated"],
                 "snapshotModes": ["text", "json"],
@@ -998,6 +999,45 @@ final class NomadAgentServer: ObservableObject {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(msg)\",\"code\":\"INVALID_ACTION_PAYLOAD\",\"success\":false}", origin: origin)
             } catch {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(error.localizedDescription)\",\"code\":\"ACTION_ERROR\",\"success\":false}", origin: origin)
+            }
+
+        case ("POST", "/upload"):
+            guard let bodyData = bodyData, !bodyData.isEmpty else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing upload body\",\"code\":\"MISSING_BODY\",\"success\":false}", origin: origin)
+                return
+            }
+            guard let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in upload body\",\"code\":\"MALFORMED_JSON\",\"success\":false}", origin: origin)
+                return
+            }
+            let targetId = (json["elementId"] as? String) ?? (json["target"] as? String) ?? (json["selector"] as? String)
+            guard let targetId = targetId, !targetId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing required 'elementId' or 'target' in upload body\",\"code\":\"MISSING_TARGET\",\"success\":false}", origin: origin)
+                return
+            }
+            var paths: [String] = []
+            if let arr = json["paths"] as? [String] {
+                paths = arr
+            } else if let arr = json["files"] as? [String] {
+                paths = arr
+            } else if let single = json["path"] as? String {
+                paths = [single]
+            } else if let single = json["file"] as? String {
+                paths = [single]
+            }
+            guard !paths.isEmpty else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing required 'paths' or 'files' array in upload body\",\"code\":\"MISSING_PATHS\",\"success\":false}", origin: origin)
+                return
+            }
+            let tid = json["tabId"] as? String
+            guard let activeTab = requireTab(id: tid) else { return }
+            do {
+                let action = NomadAction(action: "upload", target: targetId, paths: paths)
+                let result = try await activeTab.performAction(action)
+                let resData = try JSONEncoder().encode(result)
+                sendRaw(connection: connection, contentType: "application/json; charset=utf-8", data: resData, origin: origin)
+            } catch {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(error.localizedDescription)\",\"code\":\"UPLOAD_ERROR\",\"success\":false}", origin: origin)
             }
 
         case ("POST", "/evaluate"):

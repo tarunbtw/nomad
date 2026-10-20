@@ -58,7 +58,7 @@ struct NomadBounds: Codable {
 
 /// Action request issued by an AI agent or DevX tool.
 struct NomadAction: Codable {
-    var action: String = "click" // "click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight"
+    var action: String = "click" // "click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight", "upload"
     var target: String? // e.g. "e1", "e2", or CSS selector fallback
     var text: String?
     var key: String? // "Enter", "Escape", "Tab", or chords "Meta+A", "Control+Enter"
@@ -77,11 +77,44 @@ struct NomadAction: Codable {
     var optionValue: String?
     var optionText: String?
     var modifiers: [String]?
+    var paths: [String]?
+    var files: [String]?
+
+    var resolvedPaths: [String] {
+        if let paths = paths, !paths.isEmpty { return paths }
+        if let files = files, !files.isEmpty { return files }
+        return []
+    }
+
+    init(action: String = "click", target: String? = nil, text: String? = nil, key: String? = nil, direction: String? = nil, amount: CGFloat? = nil, submit: Bool? = nil, blur: Bool? = nil, change: Bool? = nil, force: Bool? = nil, x: CGFloat? = nil, y: CGFloat? = nil, toX: CGFloat? = nil, toY: CGFloat? = nil, scrollDeltaY: CGFloat? = nil, scrollDeltaX: CGFloat? = nil, optionValue: String? = nil, optionText: String? = nil, modifiers: [String]? = nil, paths: [String]? = nil, files: [String]? = nil) {
+        self.action = action
+        self.target = target
+        self.text = text
+        self.key = key
+        self.direction = direction
+        self.amount = amount
+        self.submit = submit
+        self.blur = blur
+        self.change = change
+        self.force = force
+        self.x = x
+        self.y = y
+        self.toX = toX
+        self.toY = toY
+        self.scrollDeltaY = scrollDeltaY
+        self.scrollDeltaX = scrollDeltaX
+        self.optionValue = optionValue
+        self.optionText = optionText
+        self.modifiers = modifiers
+        self.paths = paths
+        self.files = files ?? paths
+    }
 
     enum CodingKeys: String, CodingKey {
         case action, type, target, elementId, selector, text, key, direction, amount
         case submit, blur, change, force, x, y, toX, toY
         case scrollDeltaY, deltaY, scrollDeltaX, deltaX, optionValue, optionText, modifiers
+        case paths, path, files, file
     }
 
     init(from decoder: Decoder) throws {
@@ -89,7 +122,7 @@ struct NomadAction: Codable {
         guard let rawAction = (try c.decodeIfPresent(String.self, forKey: .action) ?? c.decodeIfPresent(String.self, forKey: .type))?.trimmingCharacters(in: .whitespacesAndNewlines), !rawAction.isEmpty else {
             throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Missing required 'type' or 'action' field in action object"))
         }
-        let validActions: Set<String> = ["click", "hover", "type", "clear", "press", "selectoption", "scroll", "drag", "highlight"]
+        let validActions: Set<String> = ["click", "hover", "type", "clear", "press", "selectoption", "scroll", "drag", "highlight", "upload"]
         guard validActions.contains(rawAction.lowercased()) else {
             throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Unknown action type '\(rawAction)'"))
         }
@@ -114,6 +147,27 @@ struct NomadAction: Codable {
         self.optionValue = try c.decodeIfPresent(String.self, forKey: .optionValue)
         self.optionText = try c.decodeIfPresent(String.self, forKey: .optionText)
         self.modifiers = try c.decodeIfPresent([String].self, forKey: .modifiers)
+
+        var collectedPaths: [String] = []
+        if let arr = try? c.decodeIfPresent([String].self, forKey: .paths) {
+            collectedPaths.append(contentsOf: arr)
+        } else if let single = try? c.decodeIfPresent(String.self, forKey: .paths) {
+            collectedPaths.append(single)
+        }
+        if let arr = try? c.decodeIfPresent([String].self, forKey: .files) {
+            collectedPaths.append(contentsOf: arr)
+        } else if let single = try? c.decodeIfPresent(String.self, forKey: .files) {
+            collectedPaths.append(single)
+        }
+        if let single = try? c.decodeIfPresent(String.self, forKey: .path) {
+            collectedPaths.append(single)
+        }
+        if let single = try? c.decodeIfPresent(String.self, forKey: .file) {
+            collectedPaths.append(single)
+        }
+        let unique = Array(NSOrderedSet(array: collectedPaths.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })) as? [String] ?? []
+        self.paths = unique.isEmpty ? nil : unique
+        self.files = self.paths
     }
 
     func encode(to encoder: Encoder) throws {
@@ -137,6 +191,8 @@ struct NomadAction: Codable {
         try c.encodeIfPresent(optionValue, forKey: .optionValue)
         try c.encodeIfPresent(optionText, forKey: .optionText)
         try c.encodeIfPresent(modifiers, forKey: .modifiers)
+        try c.encodeIfPresent(paths, forKey: .paths)
+        try c.encodeIfPresent(files, forKey: .files)
     }
 }
 
@@ -144,7 +200,7 @@ struct NomadAction: Codable {
 /// Execution outcome of an action.
 struct NomadActionResult: Codable {
     let success: Bool
-    let message: String
+    var message: String
     var elementId: String? = nil
     var obscured: Bool? = nil
     var interceptedBy: String? = nil
@@ -153,8 +209,10 @@ struct NomadActionResult: Codable {
     var code: String? = nil
     var stack: String? = nil
     var error: String? = nil
+    var files: [String]? = nil
+    var count: Int? = nil
 
-    init(success: Bool, message: String, elementId: String? = nil, obscured: Bool? = nil, interceptedBy: String? = nil, healed: Bool? = nil, staleRef: Bool? = nil, code: String? = nil, stack: String? = nil, error: String? = nil) {
+    init(success: Bool, message: String, elementId: String? = nil, obscured: Bool? = nil, interceptedBy: String? = nil, healed: Bool? = nil, staleRef: Bool? = nil, code: String? = nil, stack: String? = nil, error: String? = nil, files: [String]? = nil, count: Int? = nil) {
         self.success = success
         self.message = message
         self.elementId = elementId
@@ -165,6 +223,8 @@ struct NomadActionResult: Codable {
         self.code = code
         self.stack = stack
         self.error = error
+        self.files = files
+        self.count = count
     }
 }
 
@@ -856,7 +916,7 @@ enum NomadDOMScript {
                     }
                 }
 
-                var targetRequiredActions = ['type', 'clear', 'selectoption', 'drag', 'highlight'];
+                var targetRequiredActions = ['type', 'clear', 'selectoption', 'drag', 'highlight', 'upload'];
                 if (targetRequiredActions.indexOf(action) !== -1 && !targetId) {
                     return { success: false, code: 'MISSING_TARGET', message: 'No target element specified for ' + action + ' action' };
                 }
@@ -1232,6 +1292,37 @@ enum NomadDOMScript {
                         self.showHighlight(el);
                         return { success: true, message: 'Highlighted ' + targetId, elementId: targetId };
 
+                    case 'upload':
+                        if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No target element for upload action' };
+                        if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
+                            try { el.ownerDocument.defaultView.frameElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
+                        }
+                        el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                        try { el.focus(); } catch(e) {}
+
+                        // Resolve file input: el directly, or if label/button, find input[type=file]
+                        var fileInput = null;
+                        if (el.tagName === 'INPUT' && (el.type || '').toLowerCase() === 'file') {
+                            fileInput = el;
+                        } else if (el.tagName === 'LABEL') {
+                            var targetInput = el.htmlFor ? (el.ownerDocument ? el.ownerDocument.getElementById(el.htmlFor) : document.getElementById(el.htmlFor)) : el.querySelector('input[type="file"]');
+                            if (targetInput && targetInput.tagName === 'INPUT' && (targetInput.type || '').toLowerCase() === 'file') {
+                                fileInput = targetInput;
+                            }
+                        } else {
+                            fileInput = el.querySelector('input[type="file"]');
+                        }
+
+                        var targetToClick = fileInput || el;
+                        try {
+                            targetToClick.click();
+                        } catch(e) {
+                            var elDocU = targetToClick.ownerDocument || document;
+                            var elWinU = elDocU.defaultView || window;
+                            targetToClick.dispatchEvent(new elWinU.MouseEvent('click', { bubbles: true, cancelable: true, view: elWinU }));
+                        }
+                        return { success: true, message: 'Triggered file upload on ' + (targetId || 'element'), elementId: targetId };
+
                     default:
                         return { success: false, code: 'UNKNOWN_ACTION', message: 'Unknown action: ' + action };
                 }
@@ -1457,6 +1548,27 @@ extension Tab {
                 return NomadActionResult(success: false, message: "Cannot execute action '\(action.action)': active page is currently navigating. Wait for navigation to complete before dispatching actions.", elementId: action.target)
             }
         }
+
+        // Programmatic file upload staging & validation
+        if action.action.lowercased() == "upload" {
+            let paths = action.resolvedPaths
+            guard !paths.isEmpty else {
+                return NomadActionResult(success: false, message: "Missing required 'paths' or 'files' for upload action", elementId: action.target, code: "MISSING_PATHS")
+            }
+            var validatedURLs: [URL] = []
+            for path in paths {
+                let expanded = (path as NSString).expandingTildeInPath
+                guard FileManager.default.fileExists(atPath: expanded) else {
+                    return NomadActionResult(success: false, message: "File not found at path: \(path)", elementId: action.target, code: "FILE_NOT_FOUND")
+                }
+                guard FileManager.default.isReadableFile(atPath: expanded) else {
+                    return NomadActionResult(success: false, message: "File is not readable at path: \(path)", elementId: action.target, code: "FILE_NOT_READABLE")
+                }
+                validatedURLs.append(URL(fileURLWithPath: expanded))
+            }
+            self.stageUpload(urls: validatedURLs)
+        }
+
         await ensureNomadScriptInjected()
         let actionData = try JSONEncoder().encode(action)
         guard let actionJSON = String(data: actionData, encoding: .utf8) else {
@@ -1467,7 +1579,13 @@ extension Tab {
             guard let resultData = resultString.data(using: .utf8) else {
                 return NomadActionResult(success: false, message: "Failed to parse action result JSON", elementId: action.target, code: "ACTION_PARSE_ERROR")
             }
-            return try JSONDecoder().decode(NomadActionResult.self, from: resultData)
+            var res = try JSONDecoder().decode(NomadActionResult.self, from: resultData)
+            if action.action.lowercased() == "upload" && res.success {
+                res.files = action.resolvedPaths
+                res.count = action.resolvedPaths.count
+                res.message = "Successfully uploaded \(res.count ?? 1) file(s) to \(action.target ?? "element")"
+            }
+            return res
         } catch let decodeErr as DecodingError {
             return NomadActionResult(success: false, message: "Failed to decode action result: \(decodeErr.localizedDescription)", elementId: action.target, code: "ACTION_DECODE_ERROR")
         } catch {
