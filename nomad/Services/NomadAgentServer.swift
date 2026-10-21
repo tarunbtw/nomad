@@ -431,8 +431,11 @@ final class NomadAgentServer: ObservableObject {
         case ("GET", "/"), ("GET", "/status"):
             let capabilities: [String: Any] = [
                 "waitModes": ["stability", "selector", "timeout", "networkidle", "navigation", "url"],
-                "actions": ["click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight", "upload"],
+                "actions": ["click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight", "upload", "native_click", "native_type", "native_press", "native_drag", "native_hover"],
                 "upload": ["files", "paths"],
+                "downloads": ["list", "last", "wait"],
+                "hardwareInput": ["isTrusted", "cgEvent", "appKit"],
+                "frames": ["crossOrigin", "piercing", "subframes"],
                 "screenshot": ["full", "labeled", "clip", "elementId"],
                 "evaluateWorlds": ["page", "isolated"],
                 "snapshotModes": ["text", "json"],
@@ -1103,6 +1106,47 @@ final class NomadAgentServer: ObservableObject {
             } catch {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(error.localizedDescription)\",\"code\":\"UPLOAD_ERROR\",\"success\":false}", origin: origin)
             }
+
+        case ("GET", "/downloads"):
+            let limit = Int(queryItem("limit") ?? "20") ?? 20
+            let list = DownloadManager.shared.listDownloads(limit: limit)
+            sendJSON(connection: connection, object: [
+                "success": true,
+                "downloads": list,
+                "count": list.count,
+                "downloadsDirectory": DownloadManager.shared.downloadsDirectory.path
+            ], origin: origin)
+
+        case ("GET", "/downloads/last"):
+            if let last = DownloadManager.shared.lastDownloadInfo() {
+                sendJSON(connection: connection, object: [
+                    "success": true,
+                    "download": last
+                ], origin: origin)
+            } else {
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"No downloads found\",\"code\":\"NO_DOWNLOADS\",\"success\":false}", origin: origin)
+            }
+
+        case ("POST", "/downloads/wait"), ("GET", "/downloads/wait"):
+            var timeoutMs = 15000
+            var sinceDate: Date? = nil
+            let iso = ISO8601DateFormatter()
+            if method == "POST", let bodyData = bodyData,
+               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
+                if let t = json["timeoutMs"] as? Int { timeoutMs = t }
+                if let s = json["since"] as? String {
+                    sinceDate = iso.date(from: s)
+                } else if let sNum = json["since"] as? Double {
+                    sinceDate = Date(timeIntervalSince1970: sNum > 1_000_000_000_000 ? sNum / 1000.0 : sNum)
+                }
+            } else {
+                if let tStr = queryItem("timeoutMs"), let t = Int(tStr) { timeoutMs = t }
+                if let sStr = queryItem("since") {
+                    sinceDate = iso.date(from: sStr) ?? Double(sStr).map { Date(timeIntervalSince1970: $0 > 1_000_000_000_000 ? $0 / 1000.0 : $0) }
+                }
+            }
+            let res = await DownloadManager.shared.waitForDownload(timeoutMs: timeoutMs, since: sinceDate)
+            sendJSON(connection: connection, object: res, origin: origin)
 
         case ("POST", "/evaluate"):
             guard let bodyData = bodyData, !bodyData.isEmpty else {

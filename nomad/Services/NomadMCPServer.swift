@@ -273,6 +273,20 @@ final class NomadMCPServer {
                 respondTool(id: id, res: res, error: err)
             }
 
+        case "nomad_downloads":
+            var path = "/downloads"
+            if let limit = args["limit"] as? Int {
+                path += "?limit=\(limit)"
+            }
+            callNomad(method: "GET", path: path) { res, err in
+                respondTool(id: id, res: res, error: err)
+            }
+
+        case "nomad_wait_for_download":
+            callNomad(method: "POST", path: "/downloads/wait", body: args) { res, err in
+                respondTool(id: id, res: res, error: err)
+            }
+
         default:
             sendError(id: id, code: -32601, message: "Unknown tool: \(name)")
         }
@@ -522,12 +536,16 @@ final class NomadMCPServer {
                 "properties": [
                     "type": [
                         "type": "string",
-                        "enum": ["click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight", "upload"],
+                        "enum": ["click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight", "upload", "native_click", "native_hover", "native_type", "native_press", "native_drag"],
                         "description": "Type of action to execute"
                     ] as [String: Any],
-                    "elementId": ["type": "string", "description": "Target element ID from nomad_snapshot (e.g. 'e1', 'e2')"],
+                    "elementId": ["type": "string", "description": "Target element ID from nomad_snapshot (e.g. 'e1', 'e2', or subframe 'f1:e1')"],
                     "selector": ["type": "string", "description": "CSS selector fallback if elementId is not used (e.g. '.todo-list li .toggle')"],
                     "text": ["type": "string", "description": "Text to enter (for 'type' action) or key name / chord (for 'press' action, e.g. 'Enter', 'Meta+A')"],
+                    "native": [
+                        "type": "boolean",
+                        "description": "Dispatch native AppKit/CoreGraphics hardware input (sets isTrusted: true for Canvas, WebGL, Monaco, and verification sliders)"
+                    ],
                     "paths": [
                         "type": "array",
                         "items": ["type": "string"],
@@ -696,6 +714,29 @@ final class NomadMCPServer {
                     "clear": ["type": "boolean", "description": "When true, clears the network log buffer after reading (default: false)"],
                     "statusFilter": ["type": "string", "enum": ["all", "errors", "success"], "description": "Filter requests (default: all)"] as [String: Any],
                     "tabId": ["type": "string", "description": "Optional target tab UUID"]
+                ] as [String: Any],
+                "additionalProperties": false
+            ] as [String: Any]
+        ],
+        [
+            "name": "nomad_downloads",
+            "description": "List recent file downloads initiated in Nomad browser, showing destination paths, sizes, and states.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "limit": ["type": "integer", "description": "Maximum number of recent downloads to return (default: 20)"]
+                ] as [String: Any],
+                "additionalProperties": false
+            ] as [String: Any]
+        ],
+        [
+            "name": "nomad_wait_for_download",
+            "description": "Wait for an active or impending file download to complete, returning the local disk path, file size, and SHA-256 checksum.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "timeoutMs": ["type": "integer", "description": "Maximum time to wait in milliseconds (default: 15000)"],
+                    "since": ["type": "string", "description": "Optional ISO8601 timestamp; returns any download completed after this time"]
                 ] as [String: Any],
                 "additionalProperties": false
             ] as [String: Any]

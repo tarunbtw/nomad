@@ -8,6 +8,7 @@
 import AppKit
 import WebKit
 import Combine
+import CryptoKit
 
 /// Represents an active or completed file download.
 @MainActor
@@ -23,6 +24,9 @@ final class DownloadItem: NSObject, Identifiable, ObservableObject {
     @Published var receivedBytes: Int64 = 0
     @Published var state: DownloadState = .downloading
     @Published var errorMessage: String? = nil
+    @Published var completedAt: Date? = nil
+    @Published var mimeType: String? = nil
+    @Published var sha256: String? = nil
 
     enum DownloadState: String, Equatable {
         case downloading = "Downloading"
@@ -64,6 +68,9 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
     /// Strongly retains active WKDownload instances so ARC does not deallocate them during transfer.
     private var retainedDownloads: [ObjectIdentifier: WKDownload] = [:]
     private var progressObservers: [ObjectIdentifier: [NSKeyValueObservation]] = [:]
+
+    /// Waiters awaiting download completion for agent automation.
+    private var waiters: [UUID: (DownloadItem) -> Void] = [:]
 
     var activeDownloads: [DownloadItem] {
         downloads.filter { $0.state == .downloading }
@@ -138,6 +145,10 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
         if let item = downloadItems[key] {
             item.suggestedFilename = safeFilename
             item.destinationURL = destination
+            item.mimeType = response.mimeType
+            if response.expectedContentLength > 0 {
+                item.totalBytes = response.expectedContentLength
+            }
         }
         
         completionHandler(destination)
@@ -155,6 +166,11 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
         if let item = item {
             item.progress = 1.0
             item.state = .completed
+            item.completedAt = Date()
+            if let dest = item.destinationURL {
+                item.sha256 = Self.computeSHA256(for: dest)
+            }
+            notifyWaiters(item)
         }
     }
 
@@ -170,6 +186,123 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
         if let item = item {
             item.state = .failed
             item.errorMessage = error.localizedDescription
+            item.completedAt = Date()
+            notifyWaiters(item)
+        }
+    }
+
+    private func notifyWaiters(_ item: DownloadItem) {
+        let currentWaiters = Array(self.waiters.values)
+        self.waiters.removeAll()
+        for waiter in currentWaiters {
+            waiter(item)
+        }
+    }
+
+    // MARK: - Agent Download Interception & Handoff
+
+    /// Formats a DownloadItem into a comprehensive JSON-compatible dictionary for agents.
+    func itemDictionary(_ item: DownloadItem) -> [String: Any] {
+        let iso = ISO8601DateFormatter()
+        var dict: [String: Any] = [
+            "id": item.id.uuidString,
+            "filename": item.suggestedFilename,
+            "url": item.originalURL.absoluteString,
+            "state": item.state.rawValue.lowercased(),
+            "progress": item.progress,
+            "totalBytes": item.totalBytes,
+            "receivedBytes": item.receivedBytes,
+            "size": item.totalBytes > 0 ? item.totalBytes : item.receivedBytes,
+            "formattedSize": item.formattedSize,
+            "startedAt": iso.string(from: item.date)
+        ]
+        if let dest = item.destinationURL {
+            dict["path"] = dest.path
+            dict["destination"] = dest.path
+            if item.state == .completed && FileManager.default.fileExists(atPath: dest.path) {
+                if let sha = item.sha256 {
+                    dict["sha256"] = sha
+                } else if let computed = Self.computeSHA256(for: dest) {
+                    item.sha256 = computed
+                    dict["sha256"] = computed
+                }
+            }
+        }
+        if let mime = item.mimeType {
+            dict["mimeType"] = mime
+        }
+        if let completedAt = item.completedAt {
+            dict["completedAt"] = iso.string(from: completedAt)
+        }
+        if let err = item.errorMessage {
+            dict["error"] = err
+        }
+        return dict
+    }
+
+    /// Returns the most recent download, or nil if none.
+    func lastDownloadInfo() -> [String: Any]? {
+        guard let item = downloads.first else { return nil }
+        return itemDictionary(item)
+    }
+
+    /// Returns a list of recent downloads.
+    func listDownloads(limit: Int = 20) -> [[String: Any]] {
+        return downloads.prefix(max(1, limit)).map { itemDictionary($0) }
+    }
+
+    /// Computes the SHA-256 hex string for a local file using streaming chunks to minimize memory footprint.
+    nonisolated static func computeSHA256(for fileURL: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while autoreleasepool(invoking: {
+            let chunk = handle.readData(ofLength: 1024 * 1024)
+            if chunk.isEmpty { return false }
+            hasher.update(data: chunk)
+            return true
+        }) {}
+        let digest = hasher.finalize()
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Asynchronously waits for an active or impending file download to complete.
+    func waitForDownload(timeoutMs: Int = 15000, since: Date? = nil) async -> [String: Any] {
+        let referenceDate = since ?? Date().addingTimeInterval(-2.0)
+
+        // 1. Check if a download already completed after referenceDate
+        if let completedItem = downloads.first(where: { $0.state == .completed && ($0.completedAt ?? $0.date) >= referenceDate }) {
+            return ["success": true, "download": itemDictionary(completedItem)]
+        }
+
+        // 2. Wait up to timeoutMs for completion
+        let waiterId = UUID()
+        return await withCheckedContinuation { continuation in
+            var resumed = false
+            let safeResume: (([String: Any]) -> Void) = { dict in
+                if !resumed {
+                    resumed = true
+                    continuation.resume(returning: dict)
+                }
+            }
+
+            self.waiters[waiterId] = { item in
+                if item.state == .completed {
+                    safeResume(["success": true, "download": self.itemDictionary(item)])
+                } else {
+                    safeResume(["success": false, "reason": "failed", "error": item.errorMessage ?? "Download failed", "download": self.itemDictionary(item)])
+                }
+            }
+
+            Task {
+                let sleepNanos = UInt64(max(50, timeoutMs)) * 1_000_000
+                try? await Task.sleep(nanoseconds: sleepNanos)
+                await MainActor.run {
+                    if self.waiters.removeValue(forKey: waiterId) != nil {
+                        safeResume(["success": false, "reason": "timeout", "message": "Timed out waiting for download after \(timeoutMs)ms"])
+                    }
+                }
+            }
         }
     }
 

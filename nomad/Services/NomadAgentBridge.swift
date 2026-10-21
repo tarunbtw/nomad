@@ -58,7 +58,7 @@ struct NomadBounds: Codable {
 
 /// Action request issued by an AI agent or DevX tool.
 struct NomadAction: Codable {
-    var action: String = "click" // "click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight", "upload"
+    var action: String = "click" // "click", "hover", "type", "clear", "press", "selectOption", "scroll", "drag", "highlight", "upload", "native_click", "native_type", ...
     var target: String? // e.g. "e1", "e2", or CSS selector fallback
     var text: String?
     var key: String? // "Enter", "Escape", "Tab", or chords "Meta+A", "Control+Enter"
@@ -68,6 +68,7 @@ struct NomadAction: Codable {
     var blur: Bool?
     var change: Bool?
     var force: Bool?
+    var native: Bool?
     var x: CGFloat?
     var y: CGFloat?
     var toX: CGFloat?
@@ -86,7 +87,7 @@ struct NomadAction: Codable {
         return []
     }
 
-    init(action: String = "click", target: String? = nil, text: String? = nil, key: String? = nil, direction: String? = nil, amount: CGFloat? = nil, submit: Bool? = nil, blur: Bool? = nil, change: Bool? = nil, force: Bool? = nil, x: CGFloat? = nil, y: CGFloat? = nil, toX: CGFloat? = nil, toY: CGFloat? = nil, scrollDeltaY: CGFloat? = nil, scrollDeltaX: CGFloat? = nil, optionValue: String? = nil, optionText: String? = nil, modifiers: [String]? = nil, paths: [String]? = nil, files: [String]? = nil) {
+    init(action: String = "click", target: String? = nil, text: String? = nil, key: String? = nil, direction: String? = nil, amount: CGFloat? = nil, submit: Bool? = nil, blur: Bool? = nil, change: Bool? = nil, force: Bool? = nil, native: Bool? = nil, x: CGFloat? = nil, y: CGFloat? = nil, toX: CGFloat? = nil, toY: CGFloat? = nil, scrollDeltaY: CGFloat? = nil, scrollDeltaX: CGFloat? = nil, optionValue: String? = nil, optionText: String? = nil, modifiers: [String]? = nil, paths: [String]? = nil, files: [String]? = nil) {
         self.action = action
         self.target = target
         self.text = text
@@ -97,6 +98,7 @@ struct NomadAction: Codable {
         self.blur = blur
         self.change = change
         self.force = force
+        self.native = native
         self.x = x
         self.y = y
         self.toX = toX
@@ -112,7 +114,7 @@ struct NomadAction: Codable {
 
     enum CodingKeys: String, CodingKey {
         case action, type, target, elementId, selector, text, key, direction, amount
-        case submit, blur, change, force, x, y, toX, toY
+        case submit, blur, change, force, native, isNative, hardware, x, y, toX, toY
         case scrollDeltaY, deltaY, scrollDeltaX, deltaX, optionValue, optionText, modifiers
         case paths, path, files, file
     }
@@ -122,7 +124,10 @@ struct NomadAction: Codable {
         guard let rawAction = (try c.decodeIfPresent(String.self, forKey: .action) ?? c.decodeIfPresent(String.self, forKey: .type))?.trimmingCharacters(in: .whitespacesAndNewlines), !rawAction.isEmpty else {
             throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Missing required 'type' or 'action' field in action object"))
         }
-        let validActions: Set<String> = ["click", "hover", "type", "clear", "press", "selectoption", "scroll", "drag", "highlight", "upload"]
+        let validActions: Set<String> = [
+            "click", "hover", "type", "clear", "press", "selectoption", "scroll", "drag", "highlight", "upload",
+            "native_click", "native_hover", "native_type", "native_press", "native_drag"
+        ]
         guard validActions.contains(rawAction.lowercased()) else {
             throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Unknown action type '\(rawAction)'"))
         }
@@ -134,6 +139,10 @@ struct NomadAction: Codable {
         self.blur = try c.decodeIfPresent(Bool.self, forKey: .blur)
         self.change = try c.decodeIfPresent(Bool.self, forKey: .change)
         self.force = try c.decodeIfPresent(Bool.self, forKey: .force)
+        let decNative = (try? c.decodeIfPresent(Bool.self, forKey: .native))
+            ?? (try? c.decodeIfPresent(Bool.self, forKey: .isNative))
+            ?? (try? c.decodeIfPresent(Bool.self, forKey: .hardware))
+        self.native = (decNative == true) || rawAction.lowercased().hasPrefix("native_")
         self.x = try c.decodeIfPresent(CGFloat.self, forKey: .x)
         self.y = try c.decodeIfPresent(CGFloat.self, forKey: .y)
         self.toX = try c.decodeIfPresent(CGFloat.self, forKey: .toX)
@@ -182,6 +191,7 @@ struct NomadAction: Codable {
         try c.encodeIfPresent(blur, forKey: .blur)
         try c.encodeIfPresent(change, forKey: .change)
         try c.encodeIfPresent(force, forKey: .force)
+        try c.encodeIfPresent(native, forKey: .native)
         try c.encodeIfPresent(x, forKey: .x)
         try c.encodeIfPresent(y, forKey: .y)
         try c.encodeIfPresent(toX, forKey: .toX)
@@ -211,8 +221,10 @@ struct NomadActionResult: Codable {
     var error: String? = nil
     var files: [String]? = nil
     var count: Int? = nil
+    var native: Bool? = nil
+    var isTrusted: Bool? = nil
 
-    init(success: Bool, message: String, elementId: String? = nil, obscured: Bool? = nil, interceptedBy: String? = nil, healed: Bool? = nil, staleRef: Bool? = nil, code: String? = nil, stack: String? = nil, error: String? = nil, files: [String]? = nil, count: Int? = nil) {
+    init(success: Bool, message: String, elementId: String? = nil, obscured: Bool? = nil, interceptedBy: String? = nil, healed: Bool? = nil, staleRef: Bool? = nil, code: String? = nil, stack: String? = nil, error: String? = nil, files: [String]? = nil, count: Int? = nil, native: Bool? = nil, isTrusted: Bool? = nil) {
         self.success = success
         self.message = message
         self.elementId = elementId
@@ -225,6 +237,8 @@ struct NomadActionResult: Codable {
         self.error = error
         self.files = files
         self.count = count
+        self.native = native
+        self.isTrusted = isTrusted
     }
 }
 
@@ -313,6 +327,36 @@ enum NomadDOMScript {
             return false;
         }
 
+        if (!window.__nomad_frames) window.__nomad_frames = {};
+        if (!window.__nomad_frame_listener_attached) {
+            window.__nomad_frame_listener_attached = true;
+            window.addEventListener('message', function(e) {
+                if (!e.data || typeof e.data !== 'object') return;
+                if (e.data.type === '__nomad_frame_report') {
+                    var iframes = document.querySelectorAll('iframe');
+                    var matchedId = null;
+                    for (var i = 0; i < iframes.length; i++) {
+                        try {
+                            if (iframes[i].contentWindow === e.source) {
+                                matchedId = iframes[i].getAttribute('data-nomad-frame') || ('f' + (i + 1));
+                                iframes[i].setAttribute('data-nomad-frame', matchedId);
+                                break;
+                            }
+                        } catch(err) {}
+                    }
+                    if (matchedId) {
+                        window.__nomad_frames[matchedId] = {
+                            frameId: matchedId,
+                            url: e.data.url,
+                            title: e.data.title,
+                            elements: e.data.elements || [],
+                            source: e.source
+                        };
+                    }
+                }
+            });
+        }
+
         window.__nomad = {
             elements: {},
             isTextEditable: isTextEditable,
@@ -323,6 +367,45 @@ enum NomadDOMScript {
             // Viewport-relative bounding rect accounting for parent frame offsets
             getElementViewportRect: function(element) {
                 if (!element) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+                if (typeof element === 'string') {
+                    if (element.indexOf(':') !== -1 || element.indexOf('_') !== -1) {
+                        var sep = element.indexOf(':') !== -1 ? ':' : '_';
+                        var parts = element.split(sep);
+                        var fId = parts[0].indexOf('f') === 0 ? parts[0] : parts[1];
+                        var eId = parts[0].indexOf('f') === 0 ? parts[1] : parts[0];
+                        var ifr = document.querySelector('iframe[data-nomad-frame="' + fId + '"]');
+                        if (ifr) {
+                            var ifrRect = ifr.getBoundingClientRect();
+                            var fData = window.__nomad_frames && window.__nomad_frames[fId];
+                            if (fData && fData.elements) {
+                                for (var ei = 0; ei < fData.elements.length; ei++) {
+                                    if (fData.elements[ei].id === eId) {
+                                        var eb = fData.elements[ei].bounds;
+                                        return {
+                                            left: Math.round(ifrRect.left + eb.x),
+                                            top: Math.round(ifrRect.top + eb.y),
+                                            right: Math.round(ifrRect.left + eb.x + eb.width),
+                                            bottom: Math.round(ifrRect.top + eb.y + eb.height),
+                                            width: Math.round(eb.width),
+                                            height: Math.round(eb.height)
+                                        };
+                                    }
+                                }
+                            }
+                            return {
+                                left: Math.round(ifrRect.left),
+                                top: Math.round(ifrRect.top),
+                                right: Math.round(ifrRect.right),
+                                bottom: Math.round(ifrRect.bottom),
+                                width: Math.round(ifrRect.width),
+                                height: Math.round(ifrRect.height)
+                            };
+                        }
+                    }
+                    var resolvedNode = (this.elements && this.elements[element]) || this.findInTree(document, element);
+                    if (resolvedNode) element = resolvedNode;
+                    else return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+                }
                 var r = element.getBoundingClientRect();
                 var curWin = (element.ownerDocument && element.ownerDocument.defaultView) ? element.ownerDocument.defaultView : window;
                 var x = r.left;
@@ -336,12 +419,12 @@ enum NomadDOMScript {
                     }
                 } catch(e) {}
                 return {
-                    left: x,
-                    top: y,
-                    right: x + r.width,
-                    bottom: y + r.height,
-                    width: r.width,
-                    height: r.height
+                    left: Math.round(x),
+                    top: Math.round(y),
+                    right: Math.round(x + r.width),
+                    bottom: Math.round(y + r.height),
+                    width: Math.round(r.width),
+                    height: Math.round(r.height)
                 };
             },
 
@@ -687,6 +770,62 @@ enum NomadDOMScript {
                     });
                 }
 
+                // Cross-Origin / Nested Sub-Frame Piercing: aggregate elements from registered iframes
+                var iframes = document.querySelectorAll('iframe');
+                for (var fi = 0; fi < iframes.length; fi++) {
+                    var ifr = iframes[fi];
+                    var ifrRect = ifr.getBoundingClientRect();
+                    if (ifrRect.width <= 5 || ifrRect.height <= 5) continue;
+                    var ifrStyle = window.getComputedStyle(ifr);
+                    if (ifrStyle.display === 'none' || ifrStyle.visibility === 'hidden') continue;
+
+                    var frameId = ifr.getAttribute('data-nomad-frame') || ('f' + (fi + 1));
+                    ifr.setAttribute('data-nomad-frame', frameId);
+
+                    try {
+                        ifr.contentWindow.postMessage({ type: '__nomad_frame_request_scan' }, '*');
+                    } catch(err) {}
+
+                    var frameData = window.__nomad_frames && window.__nomad_frames[frameId];
+                    if (frameData && frameData.elements && frameData.elements.length > 0) {
+                        for (var fei = 0; fei < frameData.elements.length; fei++) {
+                            var fel = frameData.elements[fei];
+                            var qualifiedId = frameId + ':' + fel.id;
+                            var absX = Math.round(ifrRect.left + fel.bounds.x);
+                            var absY = Math.round(ifrRect.top + fel.bounds.y);
+                            var inVp = (absY + fel.bounds.height >= 0 && absY <= vpH && absX + fel.bounds.width >= 0 && absX <= vpW);
+
+                            results.push({
+                                id: qualifiedId,
+                                tag: fel.tag,
+                                role: fel.role,
+                                text: fel.text,
+                                value: fel.value,
+                                type: fel.type,
+                                className: null,
+                                rank: null,
+                                isObscured: false,
+                                inViewport: inVp,
+                                disabled: false,
+                                checked: false,
+                                selected: false,
+                                focused: false,
+                                readOnly: false,
+                                isInShadowRoot: false,
+                                src: null,
+                                alt: null,
+                                href: null,
+                                bounds: {
+                                    x: absX,
+                                    y: absY,
+                                    width: fel.bounds.width,
+                                    height: fel.bounds.height
+                                }
+                            });
+                        }
+                    }
+                }
+
                 // Filter elements for summary if viewportOnly is specified
                 var summaryCandidates = results;
                 if (viewportOnly) {
@@ -975,6 +1114,36 @@ enum NomadDOMScript {
                 var targetRequiredActions = ['type', 'clear', 'selectoption', 'drag', 'highlight', 'upload'];
                 if (targetRequiredActions.indexOf(action) !== -1 && !targetId) {
                     return { success: false, code: 'MISSING_TARGET', message: 'No target element specified for ' + action + ' action' };
+                }
+
+                // Sub-frame action routing for frame-qualified targets (e.g. 'f1:e2' or 'e2:f1')
+                if (targetId && (targetId.indexOf(':') !== -1 || targetId.indexOf('_') !== -1)) {
+                    var sep = targetId.indexOf(':') !== -1 ? ':' : '_';
+                    var parts = targetId.split(sep);
+                    var fId = parts[0].indexOf('f') === 0 ? parts[0] : parts[1];
+                    var eId = parts[0].indexOf('f') === 0 ? parts[1] : parts[0];
+                    var ifr = document.querySelector('iframe[data-nomad-frame="' + fId + '"]');
+                    if (ifr && ifr.contentWindow) {
+                        try {
+                            ifr.contentWindow.postMessage({
+                                type: '__nomad_frame_action',
+                                target: eId,
+                                action: actionObj
+                            }, '*');
+                            return {
+                                success: true,
+                                message: 'Routed ' + action + ' to subframe ' + fId + ' on element ' + eId,
+                                elementId: targetId
+                            };
+                        } catch(err) {
+                            return {
+                                success: false,
+                                code: 'FRAME_ROUTING_ERROR',
+                                message: 'Failed to dispatch action to frame ' + fId + ': ' + String(err),
+                                elementId: targetId
+                            };
+                        }
+                    }
                 }
 
                 if (targetId && !el && action !== 'scroll' && action !== 'press') {
@@ -1681,6 +1850,12 @@ extension Tab {
             }
         }
 
+        // Native AppKit & CoreGraphics hardware input dispatch (isTrusted: true)
+        let isNative = (action.native == true) || action.action.lowercased().hasPrefix("native_")
+        if isNative {
+            return try await performNativeAction(action)
+        }
+
         // Programmatic file upload staging & validation
         if action.action.lowercased() == "upload" {
             let paths = action.resolvedPaths
@@ -1794,6 +1969,283 @@ extension Tab {
             let firstResult = try await group.next()!
             group.cancelAll()
             return firstResult
+        }
+    }
+
+    // MARK: - Native Hardware Input (AppKit & CoreGraphics isTrusted: true)
+
+    /// Synthesizes native AppKit and CoreGraphics input events delivering true OS-level user gestures (isTrusted: true).
+    @MainActor
+    func performNativeAction(_ action: NomadAction) async throws -> NomadActionResult {
+        await ensureNomadScriptInjected()
+
+        // 1. Resolve target coordinates in web view viewport space
+        var targetPoint: CGPoint? = nil
+        if let ax = action.x, let ay = action.y {
+            targetPoint = CGPoint(x: ax, y: ay)
+        } else if let target = action.target, !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let escaped = target.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            let script = "JSON.stringify(window.__nomad.getElementViewportRect(\"\(escaped)\"))"
+            if let rectStr = try? await webView.evaluateJavaScript(script) as? String,
+               let rectData = rectStr.data(using: .utf8),
+               let rect = try? JSONSerialization.jsonObject(with: rectData) as? [String: Any],
+               let x = (rect["left"] as? NSNumber)?.doubleValue,
+               let y = (rect["top"] as? NSNumber)?.doubleValue,
+               let w = (rect["width"] as? NSNumber)?.doubleValue,
+               let h = (rect["height"] as? NSNumber)?.doubleValue,
+               (w > 0 || h > 0) {
+                targetPoint = CGPoint(x: x + w / 2.0, y: y + h / 2.0)
+            } else {
+                return NomadActionResult(
+                    success: false,
+                    message: "Cannot execute native action: target element '\(target)' not found or has zero geometry in viewport.",
+                    elementId: target,
+                    code: "ELEMENT_NOT_FOUND"
+                )
+            }
+        }
+
+        let rawType = action.action.lowercased().replacingOccurrences(of: "native_", with: "")
+
+        // 2. Bring window and web view to front for active hardware input
+        if let win = webView.window {
+            if !win.isKeyWindow {
+                win.makeKeyAndOrderFront(nil)
+            }
+            if win.firstResponder != webView {
+                win.makeFirstResponder(webView)
+            }
+        }
+
+        let windowNumber = webView.window?.windowNumber ?? 0
+
+        switch rawType {
+        case "click":
+            guard let pt = targetPoint else {
+                return NomadActionResult(success: false, message: "Missing target element or (x, y) coordinates for native click", elementId: action.target, code: "MISSING_TARGET")
+            }
+            let winPoint = webView.convert(pt, to: nil)
+            let screenPoint = webView.window?.convertPoint(toScreen: winPoint) ?? winPoint
+            let primaryScreenH = NSScreen.screens.first?.frame.height ?? 1080
+            let cgPos = CGPoint(x: screenPoint.x, y: primaryScreenH - screenPoint.y)
+
+            let downEvent = NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: winPoint,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1.0
+            )
+            let upEvent = NSEvent.mouseEvent(
+                with: .leftMouseUp,
+                location: winPoint,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime + 0.03,
+                windowNumber: windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 0.0
+            )
+
+            // Low-level CoreGraphics HID injection for hardware queues
+            if let cgDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: cgPos, mouseButton: .left) {
+                cgDown.postToPid(ProcessInfo.processInfo.processIdentifier)
+            }
+            if let down = downEvent { webView.mouseDown(with: down) }
+            try? await Task.sleep(nanoseconds: 35_000_000)
+
+            if let cgUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: cgPos, mouseButton: .left) {
+                cgUp.postToPid(ProcessInfo.processInfo.processIdentifier)
+            }
+            if let up = upEvent { webView.mouseUp(with: up) }
+
+            return NomadActionResult(
+                success: true,
+                message: "Native click dispatched at (\(Int(pt.x)), \(Int(pt.y))) with isTrusted: true",
+                elementId: action.target,
+                code: "SUCCESS",
+                native: true,
+                isTrusted: true
+            )
+
+        case "hover":
+            guard let pt = targetPoint else {
+                return NomadActionResult(success: false, message: "Missing target for native hover", elementId: action.target, code: "MISSING_TARGET")
+            }
+            let winPoint = webView.convert(pt, to: nil)
+            if let moveEvent = NSEvent.mouseEvent(
+                with: .mouseMoved,
+                location: winPoint,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 0,
+                pressure: 0.0
+            ) {
+                webView.mouseMoved(with: moveEvent)
+            }
+            return NomadActionResult(success: true, message: "Native hover dispatched at (\(Int(pt.x)), \(Int(pt.y)))", elementId: action.target, code: "SUCCESS", native: true, isTrusted: true)
+
+        case "drag":
+            guard let fromPt = targetPoint else {
+                return NomadActionResult(success: false, message: "Missing source element or coordinates for native drag", elementId: action.target, code: "MISSING_TARGET")
+            }
+            guard let toX = action.toX, let toY = action.toY else {
+                return NomadActionResult(success: false, message: "Missing destination coordinates (toX, toY) for native drag", elementId: action.target, code: "MISSING_DESTINATION")
+            }
+            let toPt = CGPoint(x: toX, y: toY)
+            let fromWin = webView.convert(fromPt, to: nil)
+            let toWin = webView.convert(toPt, to: nil)
+
+            if let down = NSEvent.mouseEvent(with: .leftMouseDown, location: fromWin, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1.0) {
+                webView.mouseDown(with: down)
+            }
+            let steps = 5
+            for i in 1...steps {
+                let factor = CGFloat(i) / CGFloat(steps)
+                let intermediate = CGPoint(x: fromPt.x + (toPt.x - fromPt.x) * factor, y: fromPt.y + (toPt.y - fromPt.y) * factor)
+                let intermediateWin = webView.convert(intermediate, to: nil)
+                if let drag = NSEvent.mouseEvent(with: .leftMouseDragged, location: intermediateWin, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1.0) {
+                    webView.mouseDragged(with: drag)
+                }
+                try? await Task.sleep(nanoseconds: 15_000_000)
+            }
+            if let up = NSEvent.mouseEvent(with: .leftMouseUp, location: toWin, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0.0) {
+                webView.mouseUp(with: up)
+            }
+            return NomadActionResult(success: true, message: "Native drag executed from (\(Int(fromPt.x)), \(Int(fromPt.y))) to (\(Int(toX)), \(Int(toY))) with isTrusted: true", elementId: action.target, code: "SUCCESS", native: true, isTrusted: true)
+
+        case "type":
+            guard let text = action.text else {
+                return NomadActionResult(success: false, message: "Missing 'text' for native type action", elementId: action.target, code: "MISSING_TEXT")
+            }
+            // Click target first to focus if element specified
+            if let pt = targetPoint {
+                let winPoint = webView.convert(pt, to: nil)
+                if let down = NSEvent.mouseEvent(with: .leftMouseDown, location: winPoint, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1.0) {
+                    webView.mouseDown(with: down)
+                }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                if let up = NSEvent.mouseEvent(with: .leftMouseUp, location: winPoint, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0.0) {
+                    webView.mouseUp(with: up)
+                }
+                try? await Task.sleep(nanoseconds: 30_000_000)
+            }
+            for char in text {
+                let charStr = String(char)
+                let keyCode = Self.keyCodeForCharacter(char)
+                if let downKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, characters: charStr, charactersIgnoringModifiers: charStr, isARepeat: false, keyCode: keyCode) {
+                    webView.keyDown(with: downKey)
+                }
+                try? await Task.sleep(nanoseconds: 12_000_000)
+                if let upKey = NSEvent.keyEvent(with: .keyUp, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, characters: charStr, charactersIgnoringModifiers: charStr, isARepeat: false, keyCode: keyCode) {
+                    webView.keyUp(with: upKey)
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+            if action.submit == true {
+                if let returnDown = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36) {
+                    webView.keyDown(with: returnDown)
+                }
+                if let returnUp = NSEvent.keyEvent(with: .keyUp, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36) {
+                    webView.keyUp(with: returnUp)
+                }
+            }
+            return NomadActionResult(success: true, message: "Native typing executed (\(text.count) chars) with isTrusted: true", elementId: action.target, code: "SUCCESS", native: true, isTrusted: true)
+
+        case "press":
+            let keyName = (action.key ?? action.text ?? "Enter").trimmingCharacters(in: .whitespacesAndNewlines)
+            let (keyCode, charStr) = Self.keyCodeForKeyName(keyName)
+            if let keyDn = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, characters: charStr, charactersIgnoringModifiers: charStr, isARepeat: false, keyCode: keyCode) {
+                webView.keyDown(with: keyDn)
+            }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+            if let keyUp = NSEvent.keyEvent(with: .keyUp, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, characters: charStr, charactersIgnoringModifiers: charStr, isARepeat: false, keyCode: keyCode) {
+                webView.keyUp(with: keyUp)
+            }
+            return NomadActionResult(success: true, message: "Native keypress '\(keyName)' dispatched with isTrusted: true", elementId: action.target, code: "SUCCESS", native: true, isTrusted: true)
+
+        default:
+            return NomadActionResult(success: false, message: "Native mode not supported for action type '\(action.action)'", elementId: action.target, code: "UNSUPPORTED_NATIVE_ACTION")
+        }
+    }
+
+    private static func keyCodeForCharacter(_ char: Character) -> UInt16 {
+        switch char {
+        case "a", "A": return 0
+        case "s", "S": return 1
+        case "d", "D": return 2
+        case "f", "F": return 3
+        case "h", "H": return 4
+        case "g", "G": return 5
+        case "z", "Z": return 6
+        case "x", "X": return 7
+        case "c", "C": return 8
+        case "v", "V": return 9
+        case "b", "B": return 11
+        case "q", "Q": return 12
+        case "w", "W": return 13
+        case "e", "E": return 14
+        case "r", "R": return 15
+        case "y", "Y": return 16
+        case "t", "T": return 17
+        case "1", "!": return 18
+        case "2", "@": return 19
+        case "3", "#": return 20
+        case "4", "$": return 21
+        case "6", "^": return 22
+        case "5", "%": return 23
+        case "=", "+": return 24
+        case "9", "(": return 25
+        case "7", "&": return 26
+        case "-", "_": return 27
+        case "8", "*": return 28
+        case "0", ")": return 29
+        case "o", "O": return 31
+        case "u", "U": return 32
+        case "i", "I": return 34
+        case "p", "P": return 35
+        case "l", "L": return 37
+        case "j", "J": return 38
+        case "k", "K": return 40
+        case ";", ":": return 41
+        case "\\", "|": return 42
+        case ",", "<": return 43
+        case "/", "?": return 44
+        case "n", "N": return 45
+        case "m", "M": return 46
+        case ".", ">": return 47
+        case " ": return 49
+        case "\r", "\n": return 36
+        case "\t": return 48
+        default: return 0
+        }
+    }
+
+    private static func keyCodeForKeyName(_ name: String) -> (UInt16, String) {
+        let lower = name.lowercased()
+        switch lower {
+        case "enter", "return": return (36, "\r")
+        case "tab": return (48, "\t")
+        case "space": return (49, " ")
+        case "backspace", "delete": return (51, "\u{7f}")
+        case "escape", "esc": return (53, "\u{1b}")
+        case "arrowleft", "left": return (123, "\u{f702}")
+        case "arrowright", "right": return (124, "\u{f703}")
+        case "arrowdown", "down": return (125, "\u{f701}")
+        case "arrowup", "up": return (126, "\u{f700}")
+        default:
+            if let first = name.first {
+                return (keyCodeForCharacter(first), String(first))
+            }
+            return (36, "\r")
         }
     }
 

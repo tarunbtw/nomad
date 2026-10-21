@@ -26,8 +26,11 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 | `nomad_navigate` | Navigate active tab to URL, or go back, forward, reload (`action: 'back'|'forward'|'reload'|'url'`, optional `allowLocalFiles: true` for `file://` URLs) | ~50 tokens |
 | `nomad_wait` | Wait for DOM stability (`mode: 'stability'`), CSS selector, URL (`mode: 'url'`), network idle (`mode: 'networkidle'`), navigation, or timeout | ~40 tokens |
 | `nomad_cookies` | Inspect, inject, or clear session cookies for authentication and state (`action: 'get'|'set'|'clear'`, optional `allDomains: true`). Acts on active tab's store (profile vs ephemeral incognito). | ~80 tokens |
-| `nomad_snapshot` | **Primary perception:** Dense semantic markdown of interactive & text elements (`li`, `p`, `td`, `th`), deterministic IDs, redaction, pagination, and JSON mode (`mode: 'text' \| 'json'`) | ~400–2,000 tokens |
-| `nomad_action` | Atomic interactions (`click`, `hover`, `type`, `clear`, `press`, `selectOption`, `scroll`, `drag`, `highlight`) with automatic self-healing retry on stale refs | ~40 tokens |
+| `nomad_snapshot` | **Primary perception:** Dense semantic markdown of interactive & text elements (`li`, `p`, `td`, `th`), deterministic IDs, cross-origin iframe piercing (`f1:e1`), redaction, pagination, and JSON mode | ~400–2,000 tokens |
+| `nomad_action` | Atomic interactions (`click`, `hover`, `type`, `clear`, `press`, `selectOption`, `scroll`, `drag`, `highlight`, `upload`, `native_click`, `native_type`) with optional `native: true` (`isTrusted: true`) | ~40 tokens |
+| `nomad_upload` | Programmatic file upload to `<input type="file">`, label, or dropzone without modal system dialogs (`paths: string[]`) | ~40 tokens |
+| `nomad_downloads` | List recent file downloads, showing destination paths in `~/Downloads`, file sizes, and states | ~80 tokens |
+| `nomad_wait_for_download` | Await active or impending file download to complete; returns local disk path, size, and SHA-256 hash | ~60 tokens |
 | `nomad_screenshot` | GPU snapshot; set `labeled: true` for vision badges, or `elementId` / `clip` for cropped region capture | Base64 image |
 | `nomad_evaluate` | Run expression-oriented JavaScript in page or isolated context (`world: 'page' | 'isolated'`); returns value or descriptive error | Minimal |
 | `nomad_dialog` | Inspect or configure JavaScript dialog handling (`policy: 'accept' \| 'dismiss'`, optional prompt response text) | ~40 tokens |
@@ -61,11 +64,11 @@ Title: Todo App
 [e4] <li "Buy milk">
 [e5] <a href="/login">Sign In</a> (offscreen)
 ```
-For dense pages, tune the budget with `limit` (default 100) or `offset`, or request text-only summary:
+Default mode returns the token-efficient semantic perception markdown (~400–2,000 tokens for 100 elements; recommend `limit: 40-50` for ~600–950 tokens, ~22 tokens/element on dense pages). To receive the full JSON AST array of elements, pass `mode: 'json'`:
 ```json
 nomad_snapshot({ "limit": 40, "offset": 0, "viewportOnly": true, "includeText": true })
-// Or token-efficient summary (~600–1,200 tokens, omits full elements array):
-nomad_snapshot({ "mode": "text" })
+// Or full JSON AST element array:
+nomad_snapshot({ "mode": "json" })
 ```
 
 > [!NOTE]
@@ -98,6 +101,22 @@ Supported action types:
 - `scroll`: Scrolls the viewport by `scrollDeltaY` pixels (e.g. `300` to scroll down, `-300` to scroll up) or `scrollDeltaX`.
 - `drag`: Dispatches standard HTML5 drag-and-drop sequence (`dragstart`, `dragover`, `drop`, `dragend`) to destination (`toX`, `toY`).
 - `highlight`: Briefly flashes a high-contrast visual outline over the element for visual confirmation.
+- `upload`: Programmatically injects local files into `<input type="file">`, associated `<label>`, or dropzone containers without triggering blocking macOS `NSOpenPanel` sheets (`paths: string[]`). Automatically validates file existence on disk before dispatch.
+- **Native Hardware Input (`native: true` | `isTrusted: true`)**: Pass `"native": true` (or use `native_click`, `native_type`, `native_press`, `native_drag`) on any action to bypass synthetic JS dispatch and route through macOS AppKit and CoreGraphics HID queues directly into WebKit's window event pipeline. Produces DOM events with `event.isTrusted === true`, which is required for Canvas-based web apps (Figma, Google Docs), WebGL 3D scenes, Monaco/VSCode web editors, and anti-bot verification sliders.
+
+> [!TIP]
+> **Cross-Origin Sub-Frame Piercing (Stripe, OAuth, reCAPTCHA):**
+> Nomad automatically pierces through cross-origin iframes by injecting `NomadFrameScript` (`forMainFrameOnly: false`) across all nested browsing contexts. Interactive controls inside sub-frames appear directly in `nomad_snapshot` tagged with their frame ID (e.g. `[f1:e1] <input placeholder="Card number">`).
+> - Target sub-frame elements directly via `elementId: "f1:e1"`.
+> - Actions are automatically routed to the child frame via WebKit's secure message bridge.
+> - Sub-frame coordinates are translated to top-level viewport coordinates, so both labeled visual badges and native hardware clicks hit the exact screen coordinates inside the iframe seamlessly!
+
+> [!TIP]
+> **Download Interception & Local Handoff:**
+> When an agent interaction triggers a file download (clicking an export button, PDF download, or CSV report), Nomad intercepts the `WKDownload` stream, saves the file to `~/Downloads` without blocking system dialogs, and records full file metadata.
+> - Call `nomad_wait_for_download({ "timeoutMs": 15000 })` to await the completion of an active or impending download.
+> - Returns `{ "success": true, "download": { "filename": "report.csv", "path": "/Users/.../Downloads/report.csv", "size": 1048576, "sha256": "e3b0c442..." } }`.
+> - Call `nomad_downloads({ "limit": 20 })` to inspect recent completed or in-progress downloads.
 
 > [!TIP]
 > **Ref Self-Healing & Stale Ref Protection:**
@@ -167,7 +186,11 @@ For environments driving Nomad directly without MCP (e.g. `curl`, Python, Node.j
 | `POST` | `/navigate/forward`| Navigate forward in browser history |
 | `POST` | `/navigate/reload` | Reload active page |
 | `GET` | `/snapshot` | Query: `limit`, `offset`, `viewportOnly=true`, `includeText=true`, `mode=text`, `tabId` |
-| `POST` | `/action` | Body: `{ "type": "click"|"hover"|"type"|"clear"|"press"|"selectOption"|"scroll"|"drag"|"highlight"` (alias: `action`), `"elementId"?: string`, `"selector"?: string`, ... } |
+| `POST` | `/action` | Body: `{ "type": "click"|"hover"|"type"|"clear"|"press"|"selectOption"|"scroll"|"drag"|"highlight"|"upload"|"native_click"|"native_type"`, `"elementId"?: string`, `"selector"?: string`, `"native"?: bool` (sets `isTrusted: true`), `"paths"?: string[]`, ... } |
+| `POST` | `/upload` | Body: `{ "elementId": string, "paths": string[], "tabId"?: string }` (programmatic file upload without modal GUI sheets) |
+| `GET` | `/downloads` | Query: `limit=20`, returns list of recent file downloads (`filename`, `path`, `size`, `state`, `sha256`) |
+| `GET` | `/downloads/last` | Returns metadata of the most recent download |
+| `POST` / `GET` | `/downloads/wait` | Body / Query: `{ "timeoutMs"?: int, "since"?: string|number }`, awaits download completion returning destination path and SHA-256 hash |
 | `POST` | `/wait` | Body: `{ "mode": "stability"|"selector"|"url"|"timeout"|"networkidle"|"navigation", "selector"?: string, "urlPattern"?: string` (supports regex or plain substring), `"quietMs"?: int, "timeoutMs"?: int }` |
 | `GET` | `/cookies` | Query: `domain` (filter by target domain), `allDomains=true`, `tabId` |
 | `POST` | `/cookies` | Body: `{ "action": "set"|"get"|"clear", "domain"?: string, "name"?: string, "value"?: string, "cookies"?: [...], "allDomains"?: bool }` |

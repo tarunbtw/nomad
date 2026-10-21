@@ -221,10 +221,12 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         ucc.removeScriptMessageHandler(forName: "nomadInspect")
         ucc.removeScriptMessageHandler(forName: "nomadNetwork")
         ucc.removeScriptMessageHandler(forName: "nomadZapper")
+        ucc.removeScriptMessageHandler(forName: "nomadFrameBridge")
         ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadConsole")
         ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadInspect")
         ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadNetwork")
         ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadZapper")
+        ucc.add(WeakScriptMessageHandler(delegate: self), name: "nomadFrameBridge")
 
         setupObservers()
         
@@ -287,6 +289,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nomadInspect")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nomadNetwork")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nomadZapper")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "nomadFrameBridge")
     }
 
     deinit {
@@ -649,6 +652,8 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             if let sel = dict["selector"] as? String, let host = dict["host"] as? String {
                 ZapperStore.shared.addSelector(sel, for: host)
             }
+        } else if name == "nomadFrameBridge" {
+            // Frame registration and lifecycle message from sub-frame execution context
         }
     }
 

@@ -208,6 +208,130 @@ enum WebKitPool {
         """
         ucc.addUserScript(WKUserScript(source: networkInterceptor, injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
+        // Nomad Sub-Frame Script: Pierces cross-origin iframes (Stripe, OAuth, reCAPTCHA, embeds)
+        // Injected with forMainFrameOnly: false so every nested execution context has perception & action bridge.
+        let framePiercerScript = """
+        (function() {
+            if (window.__nomad_frame_injected) return;
+            window.__nomad_frame_injected = true;
+
+            // Only run agent message listener and element scanner inside subframes (window !== window.top)
+            if (window !== window.top) {
+                function scanFrameElements() {
+                    var list = [];
+                    var sel = 'a, button, input, textarea, select, details, summary, h1, h2, h3, img, li, p, td, th, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+                    try {
+                        var found = document.querySelectorAll(sel);
+                        var counter = 1;
+                        for (var i = 0; i < found.length; i++) {
+                            var el = found[i];
+                            var rect = el.getBoundingClientRect();
+                            if (rect.width <= 0 || rect.height <= 0) continue;
+                            var style = window.getComputedStyle(el);
+                            if (style.display === 'none' || style.visibility === 'hidden') continue;
+                            
+                            var id = el.getAttribute('data-nomad-id') || ('e' + (counter++));
+                            el.setAttribute('data-nomad-id', id);
+                            var tag = el.tagName.toLowerCase();
+                            var text = (el.getAttribute('aria-label') || el.placeholder || el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 80);
+                            var val = (tag === 'input' || tag === 'textarea' || tag === 'select') ? String(el.value || '').substring(0, 50) : null;
+                            
+                            list.push({
+                                id: id,
+                                tag: tag,
+                                role: el.getAttribute('role') || tag,
+                                text: text,
+                                value: val,
+                                type: el.getAttribute('type') || null,
+                                bounds: {
+                                    x: Math.round(rect.left),
+                                    y: Math.round(rect.top),
+                                    width: Math.round(rect.width),
+                                    height: Math.round(rect.height)
+                                }
+                            });
+                        }
+                    } catch(e) {}
+                    return list;
+                }
+
+                function reportToTop() {
+                    try {
+                        var elements = scanFrameElements();
+                        window.top.postMessage({
+                            type: '__nomad_frame_report',
+                            url: window.location.href,
+                            title: document.title || '',
+                            elements: elements
+                        }, '*');
+                        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nomadFrameBridge) {
+                            window.webkit.messageHandlers.nomadFrameBridge.postMessage({
+                                url: window.location.href,
+                                elementCount: elements.length
+                            });
+                        }
+                    } catch(e) {}
+                }
+
+                // Listen for scan requests and action execution dispatched from top frame
+                window.addEventListener('message', function(e) {
+                    if (!e.data || typeof e.data !== 'object') return;
+                    if (e.data.type === '__nomad_frame_request_scan') {
+                        reportToTop();
+                    } else if (e.data.type === '__nomad_frame_action') {
+                        var targetId = e.data.target;
+                        var actionObj = e.data.action || {};
+                        var act = (actionObj.action || actionObj.type || 'click').toLowerCase();
+                        var targetEl = document.querySelector('[data-nomad-id="' + targetId + '"]') || document.getElementById(targetId);
+                        if (!targetEl) {
+                            try {
+                                e.source.postMessage({
+                                    type: '__nomad_frame_action_result',
+                                    actionId: e.data.actionId,
+                                    result: { success: false, code: 'ELEMENT_NOT_FOUND', message: 'Element ' + targetId + ' not found in frame' }
+                                }, '*');
+                            } catch(err) {}
+                            return;
+                        }
+                        try { targetEl.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(err) {}
+                        if (act === 'click') {
+                            try { targetEl.focus(); } catch(err) {}
+                            targetEl.click();
+                        } else if (act === 'type') {
+                            try { targetEl.focus(); } catch(err) {}
+                            targetEl.value = actionObj.text || '';
+                            targetEl.dispatchEvent(new Event('input', { bubbles: true }));
+                            targetEl.dispatchEvent(new Event('change', { bubbles: true }));
+                            if (actionObj.submit) {
+                                targetEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                                targetEl.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                            }
+                        } else if (act === 'clear') {
+                            try { targetEl.focus(); } catch(err) {}
+                            targetEl.value = '';
+                            targetEl.dispatchEvent(new Event('input', { bubbles: true }));
+                            targetEl.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                        try {
+                            e.source.postMessage({
+                                type: '__nomad_frame_action_result',
+                                actionId: e.data.actionId,
+                                result: { success: true, message: 'Executed ' + act + ' on ' + targetId + ' in frame', elementId: targetId }
+                            }, '*');
+                        } catch(err) {}
+                    }
+                });
+
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', reportToTop);
+                } else {
+                    reportToTop();
+                }
+            }
+        })();
+        """
+        ucc.addUserScript(WKUserScript(source: framePiercerScript, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+
         return config
     }
 }
