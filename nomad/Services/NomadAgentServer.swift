@@ -1148,6 +1148,19 @@ final class NomadAgentServer: ObservableObject {
             let res = await DownloadManager.shared.waitForDownload(timeoutMs: timeoutMs, since: sinceDate)
             sendJSON(connection: connection, object: res, origin: origin)
 
+        case ("DELETE", "/downloads"):
+            var target: String? = queryItem("filename") ?? queryItem("path")
+            if target == nil, let bodyData = bodyData,
+               let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
+                target = json["filename"] as? String ?? json["path"] as? String
+            }
+            guard let targetFile = target, !targetFile.isEmpty else {
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing 'filename' or 'path' in DELETE /downloads\",\"code\":\"MISSING_FILENAME\",\"success\":false}", origin: origin)
+                return
+            }
+            let deleted = await MainActor.run { DownloadManager.shared.deleteDownload(filenameOrPath: targetFile) }
+            sendJSON(connection: connection, object: ["success": deleted, "filename": targetFile], origin: origin)
+
         case ("POST", "/evaluate"):
             guard let bodyData = bodyData, !bodyData.isEmpty else {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing body in /evaluate\"}", origin: origin)

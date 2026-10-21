@@ -209,7 +209,7 @@ enum WebKitPool {
         ucc.addUserScript(WKUserScript(source: networkInterceptor, injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
         // Nomad Sub-Frame Script: Pierces cross-origin iframes (Stripe, OAuth, reCAPTCHA, embeds)
-        // Injected with forMainFrameOnly: false so every nested execution context has perception & action bridge.
+        // Injected with forMainFrameOnly: false at document start so nested execution contexts are captured immediately.
         let framePiercerScript = """
         (function() {
             if (window.__nomad_frame_injected) return;
@@ -219,7 +219,7 @@ enum WebKitPool {
             if (window !== window.top) {
                 function scanFrameElements() {
                     var list = [];
-                    var sel = 'a, button, input, textarea, select, details, summary, h1, h2, h3, img, li, p, td, th, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+                    var sel = 'a, button, input, textarea, select, details, summary, h1, h2, h3, h4, h5, h6, img, li, p, td, th, pre, code, blockquote, canvas, [draggable="true"], [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [role="heading"], [role="listitem"], [role="status"], [role="alert"], [role="cell"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
                     try {
                         var found = document.querySelectorAll(sel);
                         var counter = 1;
@@ -233,7 +233,7 @@ enum WebKitPool {
                             var id = el.getAttribute('data-nomad-id') || ('e' + (counter++));
                             el.setAttribute('data-nomad-id', id);
                             var tag = el.tagName.toLowerCase();
-                            var text = (el.getAttribute('aria-label') || el.placeholder || el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 80);
+                            var text = (el.getAttribute('aria-label') || el.placeholder || el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 120);
                             var val = (tag === 'input' || tag === 'textarea' || tag === 'select') ? String(el.value || '').substring(0, 50) : null;
                             
                             list.push({
@@ -252,32 +252,72 @@ enum WebKitPool {
                             });
                         }
                     } catch(e) {}
+
+                    // Fallback for raw text, JSON, or minimal bodies rendered in navigated subframes
+                    if (list.length === 0 && document.body) {
+                        try {
+                            var bText = (document.body.innerText || document.body.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 200);
+                            if (bText.length > 0) {
+                                var br = document.body.getBoundingClientRect();
+                                list.push({
+                                    id: 'e1',
+                                    tag: 'body',
+                                    role: 'document',
+                                    text: bText,
+                                    value: null,
+                                    type: null,
+                                    bounds: {
+                                        x: Math.max(0, Math.round(br.left)),
+                                        y: Math.max(0, Math.round(br.top)),
+                                        width: Math.max(20, Math.round(br.width || window.innerWidth)),
+                                        height: Math.max(20, Math.round(br.height || window.innerHeight))
+                                    }
+                                });
+                            }
+                        } catch(e) {}
+                    }
                     return list;
                 }
 
-                function reportToTop() {
+                function reportToTop(assignedId) {
                     try {
+                        var fid = assignedId || window.__nomad_frame_id || null;
                         var elements = scanFrameElements();
-                        window.top.postMessage({
+                        var payload = {
                             type: '__nomad_frame_report',
+                            frameId: fid,
                             url: window.location.href,
                             title: document.title || '',
                             elements: elements
-                        }, '*');
+                        };
+                        try { window.top.postMessage(payload, '*'); } catch(e) {}
                         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nomadFrameBridge) {
-                            window.webkit.messageHandlers.nomadFrameBridge.postMessage({
-                                url: window.location.href,
-                                elementCount: elements.length
-                            });
+                            try {
+                                window.webkit.messageHandlers.nomadFrameBridge.postMessage({
+                                    frameId: fid,
+                                    url: window.location.href,
+                                    title: document.title || '',
+                                    elementCount: elements.length
+                                });
+                            } catch(e) {}
                         }
-                    } catch(e) {}
+                        return elements.length;
+                    } catch(e) {
+                        return 0;
+                    }
                 }
 
                 // Listen for scan requests and action execution dispatched from top frame
                 window.addEventListener('message', function(e) {
                     if (!e.data || typeof e.data !== 'object') return;
                     if (e.data.type === '__nomad_frame_request_scan') {
-                        reportToTop();
+                        if (e.data.frameId) {
+                            window.__nomad_frame_id = e.data.frameId;
+                        }
+                        var count = reportToTop(e.data.frameId);
+                        if (e.ports && e.ports[0]) {
+                            try { e.ports[0].postMessage({ success: true, count: count, frameId: e.data.frameId }); } catch(err) {}
+                        }
                     } else if (e.data.type === '__nomad_frame_action') {
                         var targetId = e.data.target;
                         var actionObj = e.data.action || {};
@@ -323,13 +363,16 @@ enum WebKitPool {
                 });
 
                 if (document.readyState === 'loading') {
-                    document.addEventListener('DOMContentLoaded', reportToTop);
+                    document.addEventListener('DOMContentLoaded', function() { reportToTop(); });
                 } else {
                     reportToTop();
                 }
+                window.addEventListener('load', function() { reportToTop(); });
+                window.addEventListener('pageshow', function() { reportToTop(); });
             }
         })();
         """
+        ucc.addUserScript(WKUserScript(source: framePiercerScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         ucc.addUserScript(WKUserScript(source: framePiercerScript, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
 
         return config

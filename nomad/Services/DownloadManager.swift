@@ -323,6 +323,30 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
         NSWorkspace.shared.activateFileViewerSelecting([dest])
     }
 
+    /// Deletes a downloaded file from disk and removes it from the downloads list.
+    @discardableResult
+    func deleteDownload(filenameOrPath: String) -> Bool {
+        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        var targetURL: URL? = nil
+        let expanded = (filenameOrPath as NSString).expandingTildeInPath
+        if FileManager.default.fileExists(atPath: expanded) {
+            targetURL = URL(fileURLWithPath: expanded)
+        } else if let dir = downloadsDir {
+            let candidate = dir.appendingPathComponent(filenameOrPath)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                targetURL = candidate
+            }
+        }
+        guard let url = targetURL else { return false }
+        do {
+            try FileManager.default.removeItem(at: url)
+            downloads.removeAll(where: { $0.destinationURL?.path == url.path || $0.suggestedFilename == filenameOrPath })
+            return true
+        } catch {
+            return false
+        }
+    }
+
     func openFile(_ item: DownloadItem) {
         guard let dest = item.destinationURL, FileManager.default.fileExists(atPath: dest.path) else { return }
         NSWorkspace.shared.open(dest)

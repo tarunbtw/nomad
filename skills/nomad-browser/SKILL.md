@@ -12,7 +12,7 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 > [!IMPORTANT]
 > **Never request raw page HTML (`outerHTML`).**
 > Raw HTML on modern websites consumes between 50,000 and 150,000 tokens per page, rapidly exhausting context windows and introducing hallucination.
-> **Always use `nomad_snapshot`** which yields a curated semantic tree costing ~400–2,000 tokens for 100 elements (~15–23 tokens/element; recommend `limit: 40-50` for ~600–950 tokens).
+> **Always use `nomad_snapshot`** which yields a curated semantic tree costing ~500–2,100 tokens for 100 elements (~20–23 tokens/element; recommend `limit: 40-50` for ~700–1,100 tokens, or `limit: 100` for ~1,400–2,100 tokens).
 
 ## Available Agent Tools
 
@@ -64,7 +64,7 @@ Title: Todo App
 [e4] <li "Buy milk">
 [e5] <a href="/login">Sign In</a> (offscreen)
 ```
-Default mode returns the token-efficient semantic perception markdown (~400–2,000 tokens for 100 elements; recommend `limit: 40-50` for ~600–950 tokens, ~22 tokens/element on dense pages). To receive the full JSON AST array of elements, pass `mode: 'json'`:
+Default mode returns the token-efficient semantic perception markdown (~700–1,100 tokens @ `limit: 40-50`, ~1,400–2,100 tokens @ `limit: 100`, ~20–23 tokens/element on dense pages). To receive the full JSON AST array of elements, pass `mode: 'json'`:
 ```json
 nomad_snapshot({ "limit": 40, "offset": 0, "viewportOnly": true, "includeText": true })
 // Or full JSON AST element array:
@@ -110,6 +110,7 @@ Supported action types:
 > - Target sub-frame elements directly via `elementId: "f1:e1"`.
 > - Actions are automatically routed to the child frame via WebKit's secure message bridge.
 > - Sub-frame coordinates are translated to top-level viewport coordinates, so both labeled visual badges and native hardware clicks hit the exact screen coordinates inside the iframe seamlessly!
+> - Sub-frame controls are automatically synchronized on each snapshot. When pages mount iframes asynchronously via delayed timers (e.g. `setTimeout`), use `nomad_wait({ mode: 'selector', selector: 'iframe' })` or poll `nomad_snapshot` until the frame mounts.
 
 > [!TIP]
 > **Download Interception & Local Handoff:**
@@ -191,6 +192,7 @@ For environments driving Nomad directly without MCP (e.g. `curl`, Python, Node.j
 | `GET` | `/downloads` | Query: `limit=20`, returns list of recent file downloads (`filename`, `path`, `size`, `state`, `sha256`) |
 | `GET` | `/downloads/last` | Returns metadata of the most recent download |
 | `POST` / `GET` | `/downloads/wait` | Body / Query: `{ "timeoutMs"?: int, "since"?: string|number }`, awaits download completion returning destination path and SHA-256 hash |
+| `DELETE` | `/downloads` | Query / Body: `filename=agent_dl.txt` or `path=...` (deletes downloaded file from disk and clears download history) |
 | `POST` | `/wait` | Body: `{ "mode": "stability"|"selector"|"url"|"timeout"|"networkidle"|"navigation", "selector"?: string, "urlPattern"?: string` (supports regex or plain substring), `"quietMs"?: int, "timeoutMs"?: int }` |
 | `GET` | `/cookies` | Query: `domain` (filter by target domain), `allDomains=true`, `tabId` |
 | `POST` | `/cookies` | Body: `{ "action": "set"|"get"|"clear", "domain"?: string, "name"?: string, "value"?: string, "cookies"?: [...], "allDomains"?: bool }` |

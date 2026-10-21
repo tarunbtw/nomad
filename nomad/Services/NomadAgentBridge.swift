@@ -334,15 +334,21 @@ enum NomadDOMScript {
                 if (!e.data || typeof e.data !== 'object') return;
                 if (e.data.type === '__nomad_frame_report') {
                     var iframes = document.querySelectorAll('iframe');
-                    var matchedId = null;
-                    for (var i = 0; i < iframes.length; i++) {
-                        try {
-                            if (iframes[i].contentWindow === e.source) {
-                                matchedId = iframes[i].getAttribute('data-nomad-frame') || ('f' + (i + 1));
-                                iframes[i].setAttribute('data-nomad-frame', matchedId);
-                                break;
-                            }
-                        } catch(err) {}
+                    var matchedId = e.data.frameId || null;
+                    if (!matchedId) {
+                        for (var i = 0; i < iframes.length; i++) {
+                            try {
+                                if (iframes[i].contentWindow === e.source) {
+                                    matchedId = iframes[i].getAttribute('data-nomad-frame') || ('f' + (i + 1));
+                                    iframes[i].setAttribute('data-nomad-frame', matchedId);
+                                    break;
+                                }
+                            } catch(err) {}
+                        }
+                    }
+                    if (!matchedId && iframes.length === 1) {
+                        matchedId = iframes[0].getAttribute('data-nomad-frame') || 'f1';
+                        iframes[0].setAttribute('data-nomad-frame', matchedId);
                     }
                     if (matchedId) {
                         window.__nomad_frames[matchedId] = {
@@ -350,7 +356,8 @@ enum NomadDOMScript {
                             url: e.data.url,
                             title: e.data.title,
                             elements: e.data.elements || [],
-                            source: e.source
+                            source: e.source,
+                            updatedAt: Date.now()
                         };
                     }
                 }
@@ -363,6 +370,73 @@ enum NomadDOMScript {
             isSensitiveField: isSensitiveField,
             isSensitiveValue: isSensitiveValue,
             isLuhnValid: isLuhnValid,
+
+            // Actively synchronize and scan all visible subframes (fixes async timing and in-frame navigation)
+            syncSubframes: function(timeoutMs) {
+                return new Promise(function(resolve) {
+                    var iframes = document.querySelectorAll('iframe');
+                    if (!iframes || iframes.length === 0) {
+                        resolve({ count: 0 });
+                        return;
+                    }
+                    var targets = [];
+                    for (var fi = 0; fi < iframes.length; fi++) {
+                        var ifr = iframes[fi];
+                        var rect = ifr.getBoundingClientRect();
+                        if (rect.width <= 5 || rect.height <= 5) continue;
+                        var style = window.getComputedStyle(ifr);
+                        if (style.display === 'none' || style.visibility === 'hidden') continue;
+                        var fId = ifr.getAttribute('data-nomad-frame') || ('f' + (fi + 1));
+                        ifr.setAttribute('data-nomad-frame', fId);
+                        targets.push({ ifr: ifr, frameId: fId });
+                    }
+                    if (targets.length === 0) {
+                        resolve({ count: 0 });
+                        return;
+                    }
+
+                    var pending = targets.length;
+                    var settled = false;
+                    var timer = setTimeout(function() {
+                        if (!settled) {
+                            settled = true;
+                            resolve({ count: targets.length, timedOut: true });
+                        }
+                    }, Math.max(50, timeoutMs || 180));
+
+                    function checkDone() {
+                        if (pending <= 0 && !settled) {
+                            settled = true;
+                            clearTimeout(timer);
+                            resolve({ count: targets.length, ready: true });
+                        }
+                    }
+
+                    for (var ti = 0; ti < targets.length; ti++) {
+                        var target = targets[ti];
+                        try {
+                            if (target.ifr.contentWindow) {
+                                var ch = new MessageChannel();
+                                ch.port1.onmessage = function() {
+                                    pending--;
+                                    checkDone();
+                                };
+                                target.ifr.contentWindow.postMessage({
+                                    type: '__nomad_frame_request_scan',
+                                    frameId: target.frameId
+                                }, '*', [ch.port2]);
+                            } else {
+                                pending--;
+                                checkDone();
+                            }
+                        } catch(e) {
+                            pending--;
+                            checkDone();
+                        }
+                    }
+                    if (pending === 0) checkDone();
+                });
+            },
 
             // Viewport-relative bounding rect accounting for parent frame offsets
             getElementViewportRect: function(element) {
@@ -496,7 +570,7 @@ enum NomadDOMScript {
                 // Recursive collector penetrating open Shadow DOM roots and same-origin / srcdoc iframes
                 function collectNodes(root, list) {
                     if (!root) return;
-                    var selector = 'a, button, input, textarea, select, details, summary, h1, h2, h3, img, li, p, td, th, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [role="heading"], [role="listitem"], [role="status"], [role="alert"], [role="cell"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"], iframe';
+                    var selector = 'a, button, input, textarea, select, details, summary, h1, h2, h3, h4, h5, h6, img, li, p, td, th, pre, code, blockquote, canvas, [draggable="true"], [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [role="heading"], [role="listitem"], [role="status"], [role="alert"], [role="cell"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"], iframe';
                     try {
                         var found = root.querySelectorAll(selector);
                         for (var i = 0; i < found.length; i++) {
@@ -567,6 +641,10 @@ enum NomadDOMScript {
                         }
                         var fallbackVal = (isSensitiveField(el) || isSensitiveValue(el.value)) ? '' : (el.value || '');
                         var rawText = (el.innerText || el.textContent || fallbackVal).trim();
+                        if (!rawText && (el.tagName === 'CANVAS' || el.getAttribute('draggable') === 'true')) {
+                            if (el.id) return '#' + el.id;
+                            if (el.className) return '.' + String(el.className).trim().split(' ')[0];
+                        }
                         if (isSensitiveValue(rawText)) return '';
                         return rawText;
                     } catch(e) {
@@ -1113,6 +1191,9 @@ enum NomadDOMScript {
 
                 var targetRequiredActions = ['type', 'clear', 'selectoption', 'drag', 'highlight', 'upload'];
                 if (targetRequiredActions.indexOf(action) !== -1 && !targetId) {
+                    if (action === 'drag') {
+                        return { success: false, code: 'MISSING_TARGET', message: 'No source element or coordinates specified for drag action' };
+                    }
                     return { success: false, code: 'MISSING_TARGET', message: 'No target element specified for ' + action + ' action' };
                 }
 
@@ -1811,6 +1892,17 @@ extension Tab {
             await ensureNomadScriptInjected()
         }
 
+        // Actively synchronize sub-frames before taking semantic snapshot
+        let syncScript = """
+        (async function() {
+            if (window.__nomad && window.__nomad.syncSubframes) {
+                return await window.__nomad.syncSubframes(180);
+            }
+            return { count: 0 };
+        })()
+        """
+        _ = try? await webView.callAsyncJavaScript(syncScript, arguments: [:], in: nil, in: .page)
+
         let opts: [String: Any] = ["limit": limit, "offset": offset, "viewportOnly": viewportOnly, "includeText": includeText]
         let optsData = (try? JSONSerialization.data(withJSONObject: opts)) ?? Data()
         let optsJSON = String(data: optsData, encoding: .utf8) ?? "{}"
@@ -2095,7 +2187,7 @@ extension Tab {
 
         case "drag":
             guard let fromPt = targetPoint else {
-                return NomadActionResult(success: false, message: "Missing source element or coordinates for native drag", elementId: action.target, code: "MISSING_TARGET")
+                return NomadActionResult(success: false, message: "No source element or coordinates specified for drag action", elementId: action.target, code: "MISSING_TARGET")
             }
             guard let toX = action.toX, let toY = action.toY else {
                 return NomadActionResult(success: false, message: "Missing destination coordinates (toX, toY) for native drag", elementId: action.target, code: "MISSING_DESTINATION")
