@@ -253,9 +253,72 @@ enum NomadDOMScript {
             return false;
         }
 
+        // Luhn algorithm check for payment cards
+        function isLuhnValid(val) {
+            var digits = String(val).replace(/[\\s-]/g, '');
+            if (!/^\\d{13,19}$/.test(digits)) return false;
+            var sum = 0, alt = false;
+            for (var i = digits.length - 1; i >= 0; i--) {
+                var n = parseInt(digits.charAt(i), 10);
+                if (alt) {
+                    n *= 2;
+                    if (n > 9) n -= 9;
+                }
+                sum += n;
+                alt = !alt;
+            }
+            return (sum % 10 === 0);
+        }
+
+        // Payment cards, CVVs, SSNs, and sensitive tokens
+        function isSensitiveValue(val) {
+            if (val === undefined || val === null) return false;
+            var str = String(val).trim();
+            if (!str) return false;
+            var digitsOnly = str.replace(/[\\s-]/g, '');
+            if (/^\\d{13,19}$/.test(digitsOnly)) {
+                if (isLuhnValid(digitsOnly) || /^(?:4\\d{12}(?:\\d{3})?|5[1-5]\\d{14}|6(?:011|5\\d{2})\\d{12}|3[47]\\d{13}|3(?:0[0-5]|[68]\\d)\\d{11}|2[2-7]\\d{14})$/.test(digitsOnly)) {
+                    return true;
+                }
+            }
+            if (/^\\d{3}-\\d{2}-\\d{4}$/.test(str)) return true;
+            return false;
+        }
+
+        // Sensitive field detection (passwords, credentials, credit cards, CVVs, SSNs, tokens, PINs)
+        function isSensitiveField(el) {
+            if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) return false;
+            if (el.type === 'password') return true;
+            var rawHint = (
+                (el.name || el.getAttribute('name') || '') + ' ' +
+                (el.id || '') + ' ' +
+                (el.autocomplete || '') + ' ' +
+                (el.placeholder || '') + ' ' +
+                (el.getAttribute('aria-label') || '') + ' ' +
+                (el.getAttribute('aria-placeholder') || '') + ' ' +
+                (el.className || '')
+            ).toLowerCase();
+            var hint = rawHint.replace(/[-_.]/g, ' ');
+            var sensitive = ['password', 'passwd', 'passcode', 'pass', 'api key', 'apikey', 'otp', 'pin', 'card', 'cvv', 'cvc', 'ssn', 'social security', 'secret', 'token', 'credit card', 'cc number', 'cc csc', 'cc exp', 'auth token', 'private key'];
+            for (var s = 0; s < sensitive.length; s++) {
+                var kw = sensitive[s];
+                if (kw === 'pin' || kw === 'otp' || kw === 'pass') {
+                    var re = new RegExp('\\\\b' + kw + '\\\\b', 'i');
+                    if (re.test(hint)) return true;
+                } else {
+                    if (hint.indexOf(kw) !== -1 || rawHint.indexOf(kw) !== -1) return true;
+                }
+            }
+            if (isSensitiveValue(el.value)) return true;
+            return false;
+        }
+
         window.__nomad = {
             elements: {},
             isTextEditable: isTextEditable,
+            isSensitiveField: isSensitiveField,
+            isSensitiveValue: isSensitiveValue,
+            isLuhnValid: isLuhnValid,
 
             // Viewport-relative bounding rect accounting for parent frame offsets
             getElementViewportRect: function(element) {
@@ -368,51 +431,6 @@ enum NomadDOMScript {
                             }
                         }
                     } catch(e) {}
-                }
-
-                // Luhn algorithm check for payment cards
-                function isLuhnValid(val) {
-                    var digits = String(val).replace(/[\\s-]/g, '');
-                    if (!/^\\d{13,19}$/.test(digits)) return false;
-                    var sum = 0, alt = false;
-                    for (var i = digits.length - 1; i >= 0; i--) {
-                        var n = parseInt(digits.charAt(i), 10);
-                        if (alt) {
-                            n *= 2;
-                            if (n > 9) n -= 9;
-                        }
-                        sum += n;
-                        alt = !alt;
-                    }
-                    return (sum % 10 === 0);
-                }
-
-                // Payment cards, CVVs, SSNs, and sensitive tokens
-                function isSensitiveValue(val) {
-                    if (val === undefined || val === null) return false;
-                    var str = String(val).trim();
-                    if (!str) return false;
-                    var digitsOnly = str.replace(/[\\s-]/g, '');
-                    if (/^\\d{13,19}$/.test(digitsOnly)) {
-                        if (isLuhnValid(digitsOnly) || /^(?:4\\d{12}(?:\\d{3})?|5[1-5]\\d{14}|6(?:011|5\\d{2})\\d{12}|3[47]\\d{13}|3(?:0[0-5]|[68]\\d)\\d{11}|2[2-7]\\d{14})$/.test(digitsOnly)) {
-                            return true;
-                        }
-                    }
-                    if (/^\\d{3}-\\d{2}-\\d{4}$/.test(str)) return true;
-                    return false;
-                }
-
-                // Sensitive field detection (passwords, credit cards, CVVs, SSNs, tokens)
-                function isSensitiveField(el) {
-                    if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') return false;
-                    if (el.type === 'password') return true;
-                    var hint = (el.name + ' ' + el.id + ' ' + (el.autocomplete || '') + ' ' + (el.placeholder || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
-                    var sensitive = ['card', 'cvv', 'cvc', 'ssn', 'social-security', 'secret', 'token', 'passcode', 'credit-card', 'cc-number', 'cc-csc', 'cc-exp'];
-                    for (var s = 0; s < sensitive.length; s++) {
-                        if (hint.indexOf(sensitive[s]) !== -1) return true;
-                    }
-                    if (isSensitiveValue(el.value)) return true;
-                    return false;
                 }
 
                 // Resolve accessible label using ARIA, label tags, placeholder, title, adjacent labels, and text
@@ -1411,18 +1429,35 @@ enum NomadDOMScript {
                 }, 3000);
             },
 
-            // 4. Overlays indexed visual badges [e1], [e2] for Vision Model Screenshots
+            // 4. Overlays indexed visual badges [e1], [e2] and obscures sensitive values for Vision Model Screenshots
             showBadges: function() {
                 this.hideBadges();
+
+                // Blur sensitive inputs during screenshot capture to protect credentials and cards
+                try {
+                    var inputs = document.querySelectorAll('input, textarea');
+                    for (var i = 0; i < inputs.length; i++) {
+                        var elIn = inputs[i];
+                        if (isSensitiveField(elIn) || isSensitiveValue(elIn.value)) {
+                            elIn.setAttribute('data-nomad-blur', elIn.style.filter || 'none');
+                            elIn.style.setProperty('filter', 'blur(6px)', 'important');
+                        }
+                    }
+                } catch(e) {}
+
                 var container = document.createElement('div');
                 container.id = '__nomad_badges_layer';
                 container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;';
-                container.innerHTML = '<style>.__nb{position:fixed;background:#000;color:#fff;border:1px solid rgba(255,255,255,0.8);font:bold 10px monospace;padding:1px 3px;border-radius:3px;box-shadow:0 1px 3px rgba(0,0,0,0.6);}</style>';
+                container.innerHTML = '<style>.__nb{position:fixed;background:#000;color:#fff;border:1px solid rgba(255,255,255,0.8);font:bold 10px monospace;padding:1px 3px;border-radius:3px;box-shadow:0 1px 3px rgba(0,0,0,0.6);z-index:2147483647;pointer-events:none;}</style>';
 
+                var vpW = window.innerWidth || 2000;
+                var vpH = window.innerHeight || 2000;
                 for (var id in this.elements) {
                     var el = this.elements[id];
+                    if (!el) continue;
                     var rect = this.getElementViewportRect(el);
                     if (rect.width <= 0 || rect.height <= 0) continue;
+                    if (rect.bottom < -20 || rect.top > vpH + 20 || rect.right < -20 || rect.left > vpW + 20) continue;
 
                     var badge = document.createElement('span');
                     badge.className = '__nb';
@@ -1431,12 +1466,31 @@ enum NomadDOMScript {
                     badge.style.top = Math.max(0, rect.top - 12) + 'px';
                     container.appendChild(badge);
                 }
-                document.body.appendChild(container);
+                if (document.body) {
+                    document.body.appendChild(container);
+                    void document.body.offsetHeight;
+                } else if (document.documentElement) {
+                    document.documentElement.appendChild(container);
+                    void document.documentElement.offsetHeight;
+                }
             },
 
             hideBadges: function() {
-                var layer = document.getElementById('__nomad_badges_layer');
-                if (layer) layer.remove();
+                var layers = document.querySelectorAll('#__nomad_badges_layer');
+                for (var l = 0; l < layers.length; l++) {
+                    layers[l].remove();
+                }
+
+                var blurred = document.querySelectorAll('[data-nomad-blur]');
+                for (var b = 0; b < blurred.length; b++) {
+                    var prevFilter = blurred[b].getAttribute('data-nomad-blur');
+                    if (prevFilter && prevFilter !== 'none') {
+                        blurred[b].style.filter = prevFilter;
+                    } else {
+                        blurred[b].style.removeProperty('filter');
+                    }
+                    blurred[b].removeAttribute('data-nomad-blur');
+                }
             },
 
             // 5. Waits for DOM mutation quiescence (stability)
@@ -1748,7 +1802,20 @@ extension Tab {
 
         if labeled {
             await ensureNomadScriptInjected()
-            _ = try? await webView.evaluateJavaScript("window.__nomad.getSemanticTree(); window.__nomad.showBadges();")
+            let badgeScript = """
+            (function() {
+                try {
+                    if (!window.__nomad) return false;
+                    window.__nomad.getSemanticTree();
+                    window.__nomad.showBadges();
+                    if (document.body) { void document.body.offsetHeight; }
+                    return true;
+                } catch(e) {
+                    return false;
+                }
+            })()
+            """
+            _ = try? await webView.evaluateJavaScript(badgeScript)
         }
 
         var targetRect: CGRect? = clip
@@ -1801,7 +1868,7 @@ extension Tab {
         }
 
         if labeled {
-            _ = try? await webView.evaluateJavaScript("window.__nomad.hideBadges();")
+            _ = try? await webView.evaluateJavaScript("window.__nomad && window.__nomad.hideBadges && window.__nomad.hideBadges();")
         }
 
         return image

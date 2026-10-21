@@ -180,26 +180,6 @@ final class NomadMCPServer {
 
         case "nomad_action":
             callNomad(method: "POST", path: "/action", body: args) { res, err in
-                if let dict = res as? [String: Any],
-                   dict["success"] as? Bool == false,
-                   (args["elementId"] as? String != nil || args["target"] as? String != nil || args["selector"] as? String != nil),
-                   (args["_retried"] as? Bool) != true {
-                    // Self-healing retry: refresh snapshot and try once more
-                    callNomad(method: "GET", path: "/snapshot") { _, _ in
-                        var retryArgs = args
-                        retryArgs["_retried"] = true
-                        callNomad(method: "POST", path: "/action", body: retryArgs) { retryRes, retryErr in
-                            var finalRes = retryRes
-                            if let retryDict = retryRes as? [String: Any], retryDict["success"] as? Bool == true {
-                                var healed = retryDict
-                                healed["healed"] = true
-                                finalRes = healed
-                            }
-                            respondTool(id: id, res: finalRes, error: retryErr)
-                        }
-                    }
-                    return
-                }
                 respondTool(id: id, res: res, error: err)
             }
 
@@ -317,31 +297,37 @@ final class NomadMCPServer {
             request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         }
 
+        var resultData: Data? = nil
+        var resultError: Error? = nil
+
         let semaphore = DispatchSemaphore(value: 0)
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            defer { semaphore.signal() }
-            if let error = error as NSError? {
-                if error.domain == NSURLErrorDomain && error.code == NSURLErrorCannotConnectToHost {
-                    completion(nil, "Could not connect to Nomad browser engine at http://127.0.0.1:\(port) (ECONNREFUSED). Nomad browser is not currently running. Please launch Nomad to enable automation.")
-                } else {
-                    completion(nil, "Network error: \(error.localizedDescription)")
-                }
-                return
-            }
-            guard let data = data else {
-                completion(nil, "Empty response from Nomad")
-                return
-            }
-            if let json = try? JSONSerialization.jsonObject(with: data) {
-                completion(json, nil)
-            } else if let text = String(data: data, encoding: .utf8) {
-                completion(text, nil)
-            } else {
-                completion(nil, "Unparseable response")
-            }
+            resultData = data
+            resultError = error
+            semaphore.signal()
         }
         task.resume()
-        semaphore.wait()
+        _ = semaphore.wait(timeout: .now() + 35.0)
+
+        if let error = resultError as NSError? {
+            if error.domain == NSURLErrorDomain && error.code == NSURLErrorCannotConnectToHost {
+                completion(nil, "Could not connect to Nomad browser engine at http://127.0.0.1:\(port) (ECONNREFUSED). Nomad browser is not currently running. Please launch Nomad to enable automation.")
+            } else {
+                completion(nil, "Network error: \(error.localizedDescription)")
+            }
+            return
+        }
+        guard let data = resultData else {
+            completion(nil, "Empty response from Nomad")
+            return
+        }
+        if let json = try? JSONSerialization.jsonObject(with: data) {
+            completion(json, nil)
+        } else if let text = String(data: data, encoding: .utf8) {
+            completion(text, nil)
+        } else {
+            completion(nil, "Unparseable response")
+        }
     }
 
     private static func callNomadRaw(method: String, path: String, completion: @escaping (Data?, String?, String?) -> Void) {
@@ -358,19 +344,25 @@ final class NomadMCPServer {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
+        var resultData: Data? = nil
+        var resultContentType: String? = nil
+        var resultError: Error? = nil
+
         let semaphore = DispatchSemaphore(value: 0)
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            defer { semaphore.signal() }
-            if let error = error {
-                completion(nil, nil, error.localizedDescription)
-                return
-            }
-            let httpResp = response as? HTTPURLResponse
-            let contentType = httpResp?.value(forHTTPHeaderField: "Content-Type")
-            completion(data, contentType, nil)
+            resultData = data
+            resultContentType = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")
+            resultError = error
+            semaphore.signal()
         }
         task.resume()
-        semaphore.wait()
+        _ = semaphore.wait(timeout: .now() + 35.0)
+
+        if let error = resultError {
+            completion(nil, nil, error.localizedDescription)
+            return
+        }
+        completion(resultData, resultContentType, nil)
     }
 
     private static func respondTool(id: Any?, res: Any?, error: String?) {

@@ -171,30 +171,80 @@ final class NomadAgentServer: ObservableObject {
         }
 
         connection.start(queue: serverQueue)
+        self.receiveRequest(connection: connection, accumulatedData: Data())
+    }
+
+    nonisolated private func receiveRequest(connection: NWConnection, accumulatedData: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 1048576) { [weak self] data, _, _, error in
             guard let self = self else {
                 connection.cancel()
                 return
             }
-            if let data = data, !data.isEmpty {
-                self.processRequest(data: data, connection: connection)
-            } else {
-                connection.cancel()
-            }
             if let error = error {
-                print("⚠️ [NomadAgentServer] Connection error: \(error)")
                 connection.cancel()
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                if !accumulatedData.isEmpty {
+                    self.processRequest(data: accumulatedData, connection: connection)
+                } else {
+                    connection.cancel()
+                }
+                return
+            }
+
+            var current = accumulatedData
+            current.append(data)
+
+            // Check if headers boundary \r\n\r\n is present
+            if let headerEndRange = current.range(of: Data("\r\n\r\n".utf8)) {
+                let headerData = current.subdata(in: 0..<headerEndRange.lowerBound)
+                let bodyCount = current.count - headerEndRange.upperBound
+
+                // Parse Content-Length if present
+                var expectedContentLength = 0
+                if let headerStr = String(data: headerData, encoding: .utf8) {
+                    for line in headerStr.components(separatedBy: "\r\n") {
+                        let lower = line.lowercased()
+                        if lower.hasPrefix("content-length:") {
+                            let valStr = line.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)
+                            expectedContentLength = Int(valStr) ?? 0
+                            break
+                        }
+                    }
+                }
+
+                if bodyCount < expectedContentLength {
+                    // Body is incomplete, continue receiving more chunks from this connection
+                    self.receiveRequest(connection: connection, accumulatedData: current)
+                    return
+                }
+
+                // Complete HTTP request received!
+                self.processRequest(data: current, connection: connection)
+            } else {
+                // Headers still incomplete, continue receiving
+                self.receiveRequest(connection: connection, accumulatedData: current)
             }
         }
     }
 
     nonisolated private func processRequest(data: Data, connection: NWConnection) {
-        guard let requestString = String(data: data, encoding: .utf8) else {
-            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid UTF-8 payload\"}")
+        // Extract headers and body
+        guard let headerEndRange = data.range(of: Data("\r\n\r\n".utf8)) else {
+            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed HTTP request\"}")
             return
         }
 
-        let lines = requestString.components(separatedBy: "\r\n")
+        let headerData = data.subdata(in: 0..<headerEndRange.lowerBound)
+        let bodyData = headerEndRange.upperBound < data.count ? data.subdata(in: headerEndRange.upperBound..<data.count) : nil
+
+        guard let headerString = String(data: headerData, encoding: .utf8) else {
+            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid UTF-8 in headers\"}")
+            return
+        }
+
+        let lines = headerString.components(separatedBy: "\r\n")
         guard let requestLine = lines.first, !requestLine.isEmpty else {
             sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Empty request\"}")
             return
@@ -219,13 +269,6 @@ final class NomadAgentServer: ObservableObject {
                 let val = line[line.index(after: colonIdx)...].trimmingCharacters(in: .whitespaces)
                 headers[key] = val
             }
-        }
-
-        // Extract body if present
-        var bodyData: Data? = nil
-        if let bodyRange = requestString.range(of: "\r\n\r\n") {
-            let bodySub = requestString[bodyRange.upperBound...]
-            bodyData = bodySub.data(using: .utf8)
         }
 
         Task { @MainActor in
