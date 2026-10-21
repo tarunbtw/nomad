@@ -146,6 +146,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     @Published var lastNavigationFinishTime: Date? = nil
     @Published var lastActionTime: Date? = nil
     var allowNextFileNavigation: Bool = false
+    var currentNavigation: WKNavigation? = nil
 
     /// Staged file URLs ready for programmatic consumption by runOpenPanelWith during agent file uploads.
     var stagedUploadURLs: [URL]? = nil
@@ -327,7 +328,9 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         self.favicon = nil
         self.lastDialog = nil
         webView.setMagnification(1.0, centeredAt: .zero)
-        webView.evaluateJavaScript("window.scrollTo(0, 0)", completionHandler: nil)
+        if webView.isLoading {
+            webView.stopLoading()
+        }
         if url.isFileURL {
             self.allowNextFileNavigation = true
             let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
@@ -336,7 +339,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             let readDir = resolved.pathComponents.count > 2 ? resolved.deletingLastPathComponent() : URL(fileURLWithPath: "/")
             self.url = resolved
             if isWebDocument {
-                webView.loadFileURL(resolved, allowingReadAccessTo: readDir)
+                self.currentNavigation = webView.loadFileURL(resolved, allowingReadAccessTo: readDir)
             } else {
                 if let data = try? Data(contentsOf: resolved) {
                     let mimeType: String
@@ -355,17 +358,19 @@ final class Tab: NSObject, Identifiable, ObservableObject {
                         mimeType = "image/gif"
                     case "webp":
                         mimeType = "image/webp"
+                    case "pdf":
+                        mimeType = "application/pdf"
                     default:
                         mimeType = "text/plain"
                     }
-                    webView.load(data, mimeType: mimeType, characterEncodingName: "utf-8", baseURL: resolved)
+                    self.currentNavigation = webView.load(data, mimeType: mimeType, characterEncodingName: "utf-8", baseURL: resolved)
                 } else {
-                    webView.loadFileURL(resolved, allowingReadAccessTo: readDir)
+                    self.currentNavigation = webView.loadFileURL(resolved, allowingReadAccessTo: readDir)
                 }
             }
         } else {
             let request = URLRequest(url: url)
-            webView.load(request)
+            self.currentNavigation = webView.load(request)
         }
         fetchFavicon(for: url)
     }
@@ -412,7 +417,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
 
     func reload() {
         if isInternalPage { return }
-        webView.reload()
+        self.currentNavigation = webView.reload()
     }
 
     func stopLoading() {
@@ -849,6 +854,9 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let curNav = self.currentNavigation, navigation != curNav {
+            return
+        }
         self.allowNextFileNavigation = false
         self.isLoading = false
         self.lastNavigationFinishTime = Date()
@@ -904,35 +912,78 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        self.currentNavigation = navigation
         self.networkEntries.removeAll()
         self.lastNavigationStartTime = Date()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        let nsErr = error as NSError
+        let isCancelled = (nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled)
+        if isCancelled {
+            print("Tab Navigation was cancelled (superseded): \(error.localizedDescription)")
+            return
+        }
+        if let curNav = self.currentNavigation, navigation != curNav {
+            print("Tab Navigation failure belongs to superseded navigation, ignoring: \(error.localizedDescription)")
+            return
+        }
+
         self.allowNextFileNavigation = false
         self.isLoading = false
         self.lastNavigationFinishTime = Date()
-        let nsErr = error as NSError
-        if !(nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled) {
-            self.lastNavigationError = error.localizedDescription
-        }
+        self.lastNavigationError = error.localizedDescription
         print("Tab Navigation failed: \(error.localizedDescription)")
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         let nsErr = error as NSError
-        // Fallback for file:// URLs that WebKit rejects via loadFileURL (e.g. extensionless, custom format, or WebKitErrorCannotShowURL Code=300)
+        let isCancelled = (nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled)
+
+        // Ignore cancellations from superseded in-flight navigations so they do not wipe out allowNextFileNavigation or trigger false fallbacks
+        if isCancelled {
+            print("Tab Provisional navigation was cancelled (superseded): \(error.localizedDescription)")
+            return
+        }
+        if let curNav = self.currentNavigation, navigation != curNav {
+            print("Tab Provisional navigation failure belongs to superseded navigation, ignoring: \(error.localizedDescription)")
+            return
+        }
+
+        // Fallback for file:// URLs that WebKit actually rejects via loadFileURL (e.g. extensionless or unsupported format)
         if let currentURL = self.url, currentURL.isFileURL, self.allowNextFileNavigation, let data = try? Data(contentsOf: currentURL) {
-            print("Tab Provisional navigation failed on file URL with \(error.localizedDescription), falling back to data load")
-            self.webView.load(data, mimeType: "text/plain", characterEncodingName: "utf-8", baseURL: currentURL)
+            let ext = currentURL.pathExtension.lowercased()
+            let mimeType: String
+            switch ext {
+            case "html", "htm", "xhtml":
+                mimeType = "text/html"
+            case "svg":
+                mimeType = "image/svg+xml"
+            case "json":
+                mimeType = "application/json"
+            case "xml":
+                mimeType = "application/xml"
+            case "png":
+                mimeType = "image/png"
+            case "jpg", "jpeg":
+                mimeType = "image/jpeg"
+            case "gif":
+                mimeType = "image/gif"
+            case "webp":
+                mimeType = "image/webp"
+            case "pdf":
+                mimeType = "application/pdf"
+            default:
+                mimeType = "text/plain"
+            }
+            print("Tab Provisional navigation failed on file URL with \(error.localizedDescription), falling back to data load (\(mimeType))")
+            self.currentNavigation = self.webView.load(data, mimeType: mimeType, characterEncodingName: "utf-8", baseURL: currentURL)
             return
         }
         self.allowNextFileNavigation = false
         self.isLoading = false
         self.lastNavigationFinishTime = Date()
-        if !(nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled) {
-            self.lastNavigationError = error.localizedDescription
-        }
+        self.lastNavigationError = error.localizedDescription
         print("Tab Provisional navigation failed: \(error.localizedDescription)")
     }
 

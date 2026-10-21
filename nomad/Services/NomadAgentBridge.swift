@@ -1429,21 +1429,41 @@ enum NomadDOMScript {
                 }, 3000);
             },
 
-            // 4. Overlays indexed visual badges [e1], [e2] and obscures sensitive values for Vision Model Screenshots
-            showBadges: function() {
-                this.hideBadges();
-
-                // Blur sensitive inputs during screenshot capture to protect credentials and cards
+            // Obscures sensitive values (passwords, cards, CVVs, PINs) during screenshot capture
+            blurSensitiveInputs: function() {
                 try {
                     var inputs = document.querySelectorAll('input, textarea');
                     for (var i = 0; i < inputs.length; i++) {
                         var elIn = inputs[i];
                         if (isSensitiveField(elIn) || isSensitiveValue(elIn.value)) {
-                            elIn.setAttribute('data-nomad-blur', elIn.style.filter || 'none');
-                            elIn.style.setProperty('filter', 'blur(6px)', 'important');
+                            if (!elIn.hasAttribute('data-nomad-blur')) {
+                                elIn.setAttribute('data-nomad-blur', elIn.style.filter || 'none');
+                                elIn.style.setProperty('filter', 'blur(6px)', 'important');
+                            }
                         }
                     }
                 } catch(e) {}
+            },
+
+            unblurSensitiveInputs: function() {
+                try {
+                    var blurred = document.querySelectorAll('[data-nomad-blur]');
+                    for (var b = 0; b < blurred.length; b++) {
+                        var prevFilter = blurred[b].getAttribute('data-nomad-blur');
+                        if (prevFilter && prevFilter !== 'none') {
+                            blurred[b].style.filter = prevFilter;
+                        } else {
+                            blurred[b].style.removeProperty('filter');
+                        }
+                        blurred[b].removeAttribute('data-nomad-blur');
+                    }
+                } catch(e) {}
+            },
+
+            // 4. Overlays indexed visual badges [e1], [e2] and obscures sensitive values for Vision Model Screenshots
+            showBadges: function() {
+                this.hideBadges();
+                this.blurSensitiveInputs();
 
                 var container = document.createElement('div');
                 container.id = '__nomad_badges_layer';
@@ -1480,17 +1500,7 @@ enum NomadDOMScript {
                 for (var l = 0; l < layers.length; l++) {
                     layers[l].remove();
                 }
-
-                var blurred = document.querySelectorAll('[data-nomad-blur]');
-                for (var b = 0; b < blurred.length; b++) {
-                    var prevFilter = blurred[b].getAttribute('data-nomad-blur');
-                    if (prevFilter && prevFilter !== 'none') {
-                        blurred[b].style.filter = prevFilter;
-                    } else {
-                        blurred[b].style.removeProperty('filter');
-                    }
-                    blurred[b].removeAttribute('data-nomad-blur');
-                }
+                this.unblurSensitiveInputs();
             },
 
             // 5. Waits for DOM mutation quiescence (stability)
@@ -1792,35 +1802,30 @@ extension Tab {
     /// If `elementId` or `clip` is provided, captures only the cropped element/region.
     @MainActor
     func captureScreenshot(labeled: Bool = false, elementId: String? = nil, clip: CGRect? = nil) async throws -> NSImage {
-        // Ensure pending layout, paint, and animation frames are flushed so WebKit doesn't snap a blank frame on SPAs/canvas
-        _ = try? await webView.evaluateJavaScript("""
-        new Promise(function(resolve) {
-            if (document.body) { void document.body.offsetHeight; }
-            resolve(true);
-        })
-        """)
+        await ensureNomadScriptInjected()
 
-        if labeled {
-            await ensureNomadScriptInjected()
-            let badgeScript = """
-            (function() {
-                try {
-                    if (!window.__nomad) return false;
-                    window.__nomad.getSemanticTree();
-                    window.__nomad.showBadges();
-                    if (document.body) { void document.body.offsetHeight; }
-                    return true;
-                } catch(e) {
-                    return false;
+        // Flush layout and apply sensitive input blurring (plus visual badges if labeled == true)
+        let prepScript = """
+        (function() {
+            try {
+                if (window.__nomad) {
+                    window.__nomad.blurSensitiveInputs();
+                    if (\(labeled ? "true" : "false")) {
+                        window.__nomad.getSemanticTree();
+                        window.__nomad.showBadges();
+                    }
                 }
-            })()
-            """
-            _ = try? await webView.evaluateJavaScript(badgeScript)
-        }
+                if (document.body) { void document.body.offsetHeight; }
+                return true;
+            } catch(e) {
+                return false;
+            }
+        })()
+        """
+        _ = try? await webView.evaluateJavaScript(prepScript)
 
         var targetRect: CGRect? = clip
         if targetRect == nil, let elId = elementId {
-            await ensureNomadScriptInjected()
             let safeElIdData = (try? JSONSerialization.data(withJSONObject: [elId])) ?? Data("[\"\"]".utf8)
             let safeElIdArray = String(data: safeElIdData, encoding: .utf8) ?? "[\"\"]"
             let rectScript = """
@@ -1846,6 +1851,7 @@ extension Tab {
                w > 0 && h > 0 {
                 targetRect = CGRect(x: x, y: y, width: w, height: h)
             } else {
+                _ = try? await webView.evaluateJavaScript("window.__nomad && window.__nomad.hideBadges && window.__nomad.hideBadges();")
                 throw NSError(domain: "NomadAgent", code: -5, userInfo: [NSLocalizedDescriptionKey: "Element '\(elId)' not found or has zero dimensions for screenshot crop"])
             }
         }
@@ -1855,23 +1861,24 @@ extension Tab {
             config.rect = rect
         }
 
-        let image = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<NSImage, Error>) in
-            self.webView.takeSnapshot(with: config) { img, err in
-                if let err = err {
-                    continuation.resume(throwing: err)
-                } else if let img = img {
-                    continuation.resume(returning: img)
-                } else {
-                    continuation.resume(throwing: NSError(domain: "NomadAgent", code: -4, userInfo: [NSLocalizedDescriptionKey: "Snapshot returned nil"]))
+        do {
+            let image = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<NSImage, Error>) in
+                self.webView.takeSnapshot(with: config) { img, err in
+                    if let err = err {
+                        continuation.resume(throwing: err)
+                    } else if let img = img {
+                        continuation.resume(returning: img)
+                    } else {
+                        continuation.resume(throwing: NSError(domain: "NomadAgent", code: -4, userInfo: [NSLocalizedDescriptionKey: "Snapshot returned nil"]))
+                    }
                 }
             }
-        }
-
-        if labeled {
             _ = try? await webView.evaluateJavaScript("window.__nomad && window.__nomad.hideBadges && window.__nomad.hideBadges();")
+            return image
+        } catch {
+            _ = try? await webView.evaluateJavaScript("window.__nomad && window.__nomad.hideBadges && window.__nomad.hideBadges();")
+            throw error
         }
-
-        return image
     }
 }
 

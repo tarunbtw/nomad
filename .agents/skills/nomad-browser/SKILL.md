@@ -12,7 +12,7 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 > [!IMPORTANT]
 > **Never request raw page HTML (`outerHTML`).**
 > Raw HTML on modern websites consumes between 50,000 and 150,000 tokens per page, rapidly exhausting context windows and introducing hallucination.
-> **Always use `nomad_snapshot`** which yields a curated semantic tree costing ~400–2,000 tokens for 100 elements (~15–20 tokens/element; recommend `limit: 40-50` for ~600–900 tokens).
+> **Always use `nomad_snapshot`** which yields a curated semantic tree costing ~400–2,000 tokens for 100 elements (~15–23 tokens/element; recommend `limit: 40-50` for ~600–950 tokens).
 
 ## Available Agent Tools
 
@@ -25,7 +25,7 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 | `nomad_close_tab` | Close tab by `id` | ~30 tokens |
 | `nomad_navigate` | Navigate active tab to URL, or go back, forward, reload (`action: 'back'|'forward'|'reload'|'url'`, optional `allowLocalFiles: true` for `file://` URLs) | ~50 tokens |
 | `nomad_wait` | Wait for DOM stability (`mode: 'stability'`), CSS selector, URL (`mode: 'url'`), network idle (`mode: 'networkidle'`), navigation, or timeout | ~40 tokens |
-| `nomad_cookies` | Inspect, inject, or clear session cookies for authentication and state (`action: 'get'|'set'|'clear'`, optional `allDomains: true`) | ~80 tokens |
+| `nomad_cookies` | Inspect, inject, or clear session cookies for authentication and state (`action: 'get'|'set'|'clear'`, optional `allDomains: true`). Acts on active tab's store (profile vs ephemeral incognito). | ~80 tokens |
 | `nomad_snapshot` | **Primary perception:** Dense semantic markdown of interactive & text elements (`li`, `p`, `td`, `th`), deterministic IDs, redaction, pagination, and JSON mode (`mode: 'text' \| 'json'`) | ~400–2,000 tokens |
 | `nomad_action` | Atomic interactions (`click`, `hover`, `type`, `clear`, `press`, `selectOption`, `scroll`, `drag`, `highlight`) with automatic self-healing retry on stale refs | ~40 tokens |
 | `nomad_screenshot` | GPU snapshot; set `labeled: true` for vision badges, or `elementId` / `clip` for cropped region capture | Base64 image |
