@@ -667,16 +667,39 @@ final class NomadAgentServer: ObservableObject {
                 let checkScript = """
                 (() => {
                     var sel = \(escapedSelector);
+                    function match(node, s) {
+                        if (!node) return false;
+                        try {
+                            if (node.querySelector(s) || node.querySelector('[data-nomad-id="' + s + '"]')) return true;
+                        } catch(e) {}
+                        return false;
+                    }
+                    function deepSearch(root) {
+                        if (!root) return false;
+                        if (match(root, sel)) return true;
+                        try {
+                            var all = root.querySelectorAll('*');
+                            for (var i = 0; i < all.length; i++) {
+                                var el = all[i];
+                                if (el.shadowRoot) {
+                                    if (deepSearch(el.shadowRoot)) return true;
+                                }
+                                if (el.tagName === 'IFRAME') {
+                                    try {
+                                        var fDoc = el.contentDocument || (el.contentWindow ? el.contentWindow.document : null);
+                                        if (fDoc && deepSearch(fDoc)) return true;
+                                    } catch(e) {}
+                                }
+                            }
+                        } catch(e) {}
+                        return false;
+                    }
                     if (window.__nomad && window.__nomad.findInTree) {
                         try {
                             if (window.__nomad.findInTree(document, sel)) return true;
                         } catch(e) {}
                     }
-                    try {
-                        return Boolean(document.querySelector(sel));
-                    } catch(e) {
-                        return false;
-                    }
+                    return deepSearch(document);
                 })()
                 """
 
@@ -721,18 +744,6 @@ final class NomadAgentServer: ObservableObject {
                 let initialUrl = activeTab.url?.absoluteString ?? ""
                 var didStartNavigating = activeTab.isLoading
                 let startTime = Date()
-
-                // If awaiting general navigation (no URL pattern) and the tab is already not loading:
-                // Check if a navigation finished recently (< 3.0s ago) with no subsequent action dispatched.
-                if expectedPattern.isEmpty && !activeTab.isLoading {
-                    if let finish = activeTab.lastNavigationFinishTime,
-                       Date().timeIntervalSince(finish) < 3.0,
-                       (activeTab.lastActionTime == nil || activeTab.lastActionTime! <= finish) {
-                        let curUrl = activeTab.url?.absoluteString ?? ""
-                        sendJSON(connection: connection, object: ["success": true, "message": "Navigation finished", "url": curUrl], origin: origin)
-                        return
-                    }
-                }
 
                 while Date().timeIntervalSince(startTime) < (Double(timeoutMs) / 1000.0) {
                     try? await Task.sleep(nanoseconds: 50_000_000)
@@ -955,7 +966,7 @@ final class NomadAgentServer: ObservableObject {
                     sendJSON(connection: connection, object: resp, origin: origin)
                 }
             } catch {
-                sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}", origin: origin)
+                sendJSON(connection: connection, object: ["success": false, "error": error.localizedDescription, "code": "SNAPSHOT_ERROR"], origin: origin)
             }
 
         case ("POST", "/dialog"):

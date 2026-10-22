@@ -219,7 +219,7 @@ enum WebKitPool {
             if (window !== window.top) {
                 function scanFrameElements() {
                     var list = [];
-                    var sel = 'a, button, input, textarea, select, details, summary, h1, h2, h3, h4, h5, h6, img, li, p, td, th, pre, code, blockquote, canvas, [draggable="true"], [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [role="heading"], [role="listitem"], [role="status"], [role="alert"], [role="cell"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+                    var sel = 'a, button, input, textarea, select, details, summary, h1, h2, h3, h4, h5, h6, img, li, p, td, th, pre, code, blockquote, canvas, [draggable], [ondragstart], [ondrop], [id*="hit"], [id*="drag"], [id*="drop"], [class*="drag"], [class*="drop"], [class*="dropzone"], [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [role="heading"], [role="listitem"], [role="status"], [role="alert"], [role="cell"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
                     try {
                         var found = document.querySelectorAll(sel);
                         var counter = 1;
@@ -233,12 +233,17 @@ enum WebKitPool {
                             var id = el.getAttribute('data-nomad-id') || ('e' + (counter++));
                             el.setAttribute('data-nomad-id', id);
                             var tag = el.tagName.toLowerCase();
+                            var domId = el.id ? String(el.id).trim() : null;
                             var text = (el.getAttribute('aria-label') || el.placeholder || el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 120);
+                            if (!text && (tag === 'canvas' || el.draggable === true || el.id === 'hit')) {
+                                text = domId ? ('#' + domId) : (tag === 'canvas' ? 'canvas' : '');
+                            }
                             var val = (tag === 'input' || tag === 'textarea' || tag === 'select') ? String(el.value || '').substring(0, 50) : null;
                             
                             list.push({
                                 id: id,
                                 tag: tag,
+                                domId: domId,
                                 role: el.getAttribute('role') || tag,
                                 text: text,
                                 value: val,

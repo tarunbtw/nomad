@@ -33,6 +33,7 @@ struct NomadElement: Codable {
     let type: String?
     let bounds: NomadBounds
     var className: String?
+    var domId: String?
     var rank: String?
     var isObscured: Bool?
     var inViewport: Bool?
@@ -570,21 +571,24 @@ enum NomadDOMScript {
                 // Recursive collector penetrating open Shadow DOM roots and same-origin / srcdoc iframes
                 function collectNodes(root, list) {
                     if (!root) return;
-                    var selector = 'a, button, input, textarea, select, details, summary, h1, h2, h3, h4, h5, h6, img, li, p, td, th, pre, code, blockquote, canvas, [draggable="true"], [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [role="heading"], [role="listitem"], [role="status"], [role="alert"], [role="cell"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"], iframe';
+                    var selector = 'a, button, input, textarea, select, details, summary, h1, h2, h3, h4, h5, h6, img, li, p, td, th, pre, code, blockquote, canvas, [draggable], [ondragstart], [ondrop], [id*="hit"], [id*="drag"], [id*="drop"], [class*="drag"], [class*="drop"], [class*="dropzone"], [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [role="switch"], [role="option"], [role="heading"], [role="listitem"], [role="status"], [role="alert"], [role="cell"], [tabindex]:not([tabindex="-1"]), [contenteditable="true"], iframe';
                     try {
                         var found = root.querySelectorAll(selector);
                         for (var i = 0; i < found.length; i++) {
-                            list.push(found[i]);
+                            if (list.indexOf(found[i]) === -1) list.push(found[i]);
                         }
                         var all = root.querySelectorAll('*');
                         for (var j = 0; j < all.length; j++) {
-                            if (all[j].shadowRoot) {
-                                collectNodes(all[j].shadowRoot, list);
-                            } else if (all[j].tagName === 'IFRAME') {
+                            var n = all[j];
+                            if (n.shadowRoot) {
+                                collectNodes(n.shadowRoot, list);
+                            } else if (n.tagName === 'IFRAME') {
                                 try {
-                                    var fDoc = all[j].contentDocument || (all[j].contentWindow ? all[j].contentWindow.document : null);
+                                    var fDoc = n.contentDocument || (n.contentWindow ? n.contentWindow.document : null);
                                     if (fDoc) collectNodes(fDoc, list);
                                 } catch(e) {}
+                            } else if (n.tagName === 'CANVAS' || n.draggable === true || n.id === 'hit' || (n.id && (n.id.indexOf('hit') !== -1 || n.id.indexOf('drag') !== -1 || n.id.indexOf('drop') !== -1))) {
+                                if (list.indexOf(n) === -1) list.push(n);
                             }
                         }
                     } catch(e) {}
@@ -641,9 +645,10 @@ enum NomadDOMScript {
                         }
                         var fallbackVal = (isSensitiveField(el) || isSensitiveValue(el.value)) ? '' : (el.value || '');
                         var rawText = (el.innerText || el.textContent || fallbackVal).trim();
-                        if (!rawText && (el.tagName === 'CANVAS' || el.getAttribute('draggable') === 'true')) {
+                        if (!rawText && (el.tagName === 'CANVAS' || el.draggable === true || el.getAttribute('draggable') !== null || el.id === 'hit' || (el.id && el.id.indexOf('hit') !== -1))) {
                             if (el.id) return '#' + el.id;
                             if (el.className) return '.' + String(el.className).trim().split(' ')[0];
+                            if (el.tagName === 'CANVAS') return 'canvas';
                         }
                         if (isSensitiveValue(rawText)) return '';
                         return rawText;
@@ -818,6 +823,7 @@ enum NomadDOMScript {
                     var readOnly = Boolean(el.readOnly || el.getAttribute('aria-readonly') === 'true');
                     var inShadow = Boolean(el.getRootNode && el.getRootNode().host);
                     var href = (tag === 'a' || tag === 'area') ? (el.getAttribute('href') || el.href || null) : null;
+                    var domId = el.id ? String(el.id).trim() : null;
 
                     results.push({
                         id: id,
@@ -827,6 +833,7 @@ enum NomadDOMScript {
                         value: val,
                         type: type,
                         className: cls,
+                        domId: domId,
                         rank: itemRank,
                         isObscured: isObscured,
                         inViewport: inViewport,
@@ -881,6 +888,7 @@ enum NomadDOMScript {
                                 value: fel.value,
                                 type: fel.type,
                                 className: null,
+                                domId: fel.domId || null,
                                 rank: null,
                                 isObscured: false,
                                 inViewport: inVp,
@@ -934,6 +942,7 @@ enum NomadDOMScript {
                     var desc = '[' + item.id + ']';
                     if (item.rank) desc += ' #' + item.rank;
                     desc += ' <' + item.tag;
+                    if (item.domId) desc += ' id="' + item.domId + '"';
                     if (item.type) desc += ' type="' + item.type + '"';
                     if (item.role && item.role !== item.tag) desc += ' role="' + item.role + '"';
                     if (item.href) {
@@ -1191,9 +1200,6 @@ enum NomadDOMScript {
 
                 var targetRequiredActions = ['type', 'clear', 'selectoption', 'drag', 'highlight', 'upload'];
                 if (targetRequiredActions.indexOf(action) !== -1 && !targetId) {
-                    if (action === 'drag') {
-                        return { success: false, code: 'MISSING_TARGET', message: 'No source element or coordinates specified for drag action' };
-                    }
                     return { success: false, code: 'MISSING_TARGET', message: 'No target element specified for ' + action + ' action' };
                 }
 
@@ -1437,7 +1443,7 @@ enum NomadDOMScript {
                         return { success: true, message: inputMsg, elementId: targetId };
 
                     case 'drag':
-                        if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No source element for drag action' };
+                        if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No target element for drag action' };
                         el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
                         var srcRect = el.getBoundingClientRect();
                         var startX = Math.round(srcRect.left + srcRect.width / 2);
@@ -2187,7 +2193,7 @@ extension Tab {
 
         case "drag":
             guard let fromPt = targetPoint else {
-                return NomadActionResult(success: false, message: "No source element or coordinates specified for drag action", elementId: action.target, code: "MISSING_TARGET")
+                return NomadActionResult(success: false, message: "No target element or coordinates specified for drag action", elementId: action.target, code: "MISSING_TARGET")
             }
             guard let toX = action.toX, let toY = action.toY else {
                 return NomadActionResult(success: false, message: "Missing destination coordinates (toX, toY) for native drag", elementId: action.target, code: "MISSING_DESTINATION")

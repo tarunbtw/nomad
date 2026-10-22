@@ -238,4 +238,9 @@ Nomad includes a 100% native Swift Model Context Protocol (MCP) server directly 
 ```
 
 > [!TIP]
-> If you have symlinked Nomad to your PATH (`sudo ln -s /Applications/Nomad.app/Contents/MacOS/nomad /usr/local/bin/nomad`), you can simply specify `"command": "nomad"`.
+> - **Installed Release Build:** Use `/Applications/Nomad.app/Contents/MacOS/nomad`.
+> - **Xcode Debug Build:** When developing in Xcode, point to your DerivedData build (e.g. `~/Library/Developer/Xcode/DerivedData/nomad-*/Build/Products/Debug/nomad.app/Contents/MacOS/nomad`) or symlink it:
+>   ```bash
+>   ln -sf ~/Library/Developer/Xcode/DerivedData/nomad-*/Build/Products/Debug/nomad.app/Contents/MacOS/nomad /usr/local/bin/nomad
+>   ```
+>   and specify `"command": "nomad"`.

@@ -168,6 +168,11 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
             item.state = .completed
             item.completedAt = Date()
             if let dest = item.destinationURL {
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: dest.path),
+                   let fileSize = attrs[.size] as? Int64 {
+                    item.receivedBytes = fileSize
+                    if item.totalBytes <= 0 { item.totalBytes = fileSize }
+                }
                 item.sha256 = Self.computeSHA256(for: dest)
             }
             notifyWaiters(item)
@@ -204,15 +209,25 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
     /// Formats a DownloadItem into a comprehensive JSON-compatible dictionary for agents.
     func itemDictionary(_ item: DownloadItem) -> [String: Any] {
         let iso = ISO8601DateFormatter()
+        var effectiveBytes = item.receivedBytes
+        var effectiveTotal = item.totalBytes
+        if let dest = item.destinationURL, FileManager.default.fileExists(atPath: dest.path),
+           let attrs = try? FileManager.default.attributesOfItem(atPath: dest.path),
+           let onDisk = attrs[.size] as? Int64 {
+            if effectiveBytes <= 0 { effectiveBytes = onDisk }
+            if effectiveTotal <= 0 { effectiveTotal = onDisk }
+        }
+        let sizeVal = effectiveTotal > 0 ? effectiveTotal : effectiveBytes
+
         var dict: [String: Any] = [
             "id": item.id.uuidString,
             "filename": item.suggestedFilename,
             "url": item.originalURL.absoluteString,
             "state": item.state.rawValue.lowercased(),
             "progress": item.progress,
-            "totalBytes": item.totalBytes,
-            "receivedBytes": item.receivedBytes,
-            "size": item.totalBytes > 0 ? item.totalBytes : item.receivedBytes,
+            "totalBytes": effectiveTotal,
+            "receivedBytes": effectiveBytes,
+            "size": sizeVal,
             "formattedSize": item.formattedSize,
             "startedAt": iso.string(from: item.date)
         ]
