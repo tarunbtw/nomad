@@ -33,7 +33,7 @@ Nomad is an ultra-lightweight, native macOS WebKit browser engine featuring an e
 | `nomad_wait_for_download` | Await active or impending file download to complete; returns local disk path, size, and SHA-256 hash | ~60 tokens |
 | `nomad_screenshot` | GPU snapshot; set `labeled: true` for vision badges, or `elementId` / `clip` for cropped region capture | Base64 image |
 | `nomad_evaluate` | Run expression-oriented JavaScript in page or isolated context (`world: 'page' | 'isolated'`); returns value or descriptive error | Minimal |
-| `nomad_dialog` | Inspect or configure JavaScript dialog handling (`policy: 'accept' \| 'dismiss'`, optional prompt response text) | ~40 tokens |
+| `nomad_dialog` | Inspect or configure JavaScript dialog handling (`policy: 'accept' \| 'dismiss' \| 'wait'`, `action: 'accept' \| 'dismiss'`, optional prompt response text; default safe policy `'dismiss'`) | ~40 tokens |
 | `nomad_console` | Inspect recent page console logs (`log`, `warn`, `error`) or clear log buffer | ~100 tokens |
 | `nomad_network` | Inspect recent HTTP requests (fetch/XHR), status codes, latencies, and errors | ~150 tokens |
 
@@ -199,7 +199,7 @@ For environments driving Nomad directly without MCP (e.g. `curl`, Python, Node.j
 | `DELETE` | `/cookies` | Query / Body: `domain` (clears cookies for domain), `allDomains=true` (clears all profile cookies) |
 | `GET` / `POST` | `/screenshot` | Query / Body: `labeled=true`, `elementId=eN`, `clip=x,y,w,h` |
 | `POST` | `/evaluate` | Body: `{ "script": string }` (alias: `expression`), `world`: `"page"` \| `"isolated"` (returns structured error with `code: "SYNTAX_ERROR"|"EVAL_CSP"` on failure) |
-| `POST` | `/dialog` | Body: `{ "policy": "accept"|"dismiss", "response": string }` (alias: `promptResponse`) |
+| `GET` / `POST` | `/dialog` | Body / Query: `{ "policy"?: "accept"|"dismiss"|"wait", "action"?: "accept"|"dismiss", "response"?: string }` (default safe policy is `"dismiss"`; `"wait"` holds dialogs for inspection; invalid policies reject with 400 Bad Request) |
 | `GET` | `/console` | Query: `level=all|log|warn|error`, `clear=true`, `tabId` |
 | `GET` | `/network` | Query: `statusFilter=all|errors|success`, `clear=true`, `tabId` |
 

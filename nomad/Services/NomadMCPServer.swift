@@ -549,6 +549,12 @@ final class NomadMCPServer {
                     "submit": ["type": "boolean", "description": "When true, submit form or press Enter after typing"],
                     "blur": ["type": "boolean", "description": "When true, blur element after typing to trigger commit"],
                     "key": ["type": "string", "description": "Key name or chord to press (e.g. 'Enter', 'Tab', 'Escape', 'Meta+A')"],
+                    "dialogPolicy": [
+                        "type": "string",
+                        "enum": ["accept", "dismiss", "wait"],
+                        "description": "Optional dialog response policy to apply before executing action ('accept', 'dismiss', or 'wait' to hold)"
+                    ] as [String: Any],
+                    "dialogResponse": ["type": "string", "description": "Optional default response string for prompt dialogs"],
                     "tabId": ["type": "string", "description": "Optional target tab UUID"]
                 ] as [String: Any],
                 "required": ["type"],
@@ -662,14 +668,19 @@ final class NomadMCPServer {
         ],
         [
             "name": "nomad_dialog",
-            "description": "Inspect the last JavaScript dialog (alert/confirm/prompt) or configure automated response policy ('accept' | 'dismiss').",
+            "description": "Inspect the last JavaScript dialog (alert/confirm/prompt) or configure response policy ('accept' | 'dismiss' | 'wait').",
             "inputSchema": [
                 "type": "object",
                 "properties": [
                     "policy": [
                         "type": "string",
+                        "enum": ["accept", "dismiss", "wait"],
+                        "description": "Response policy for JavaScript dialogs ('accept', 'dismiss', or 'wait' to hold for inspection; default 'dismiss')"
+                    ] as [String: Any],
+                    "action": [
+                        "type": "string",
                         "enum": ["accept", "dismiss"],
-                        "description": "Response policy for window.confirm dialogs (default 'accept')"
+                        "description": "Immediate resolution action for any currently waiting dialog ('accept' | 'dismiss')"
                     ] as [String: Any],
                     "response": ["type": "string", "description": "Default text response for window.prompt dialogs"]
                 ] as [String: Any],

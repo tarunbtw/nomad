@@ -137,11 +137,27 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         var isTriggered: Bool
     }
 
+    enum PendingDialogType: String {
+        case alert
+        case confirm
+        case prompt
+    }
+
+    struct PendingDialog {
+        let type: PendingDialogType
+        let message: String
+        let defaultText: String?
+        let timestamp: Date
+        let resolve: (Any?) -> Void
+    }
+
     @Published var swipeState: SwipeGestureState? = nil
     @Published var lastNavigationError: String? = nil
     @Published var lastDialog: String? = nil
-    @Published var dialogPolicy: String = "accept"
+    @Published var dialogPolicy: String = "dismiss"
     @Published var dialogPromptResponse: String = ""
+    var pendingDialog: PendingDialog? = nil
+    private var dialogTimeoutTask: Task<Void, Never>? = nil
     @Published var navigationSeq: Int = 0
     @Published var lastNavigationStartTime: Date? = nil
     @Published var lastNavigationFinishTime: Date? = nil
@@ -337,6 +353,12 @@ final class Tab: NSObject, Identifiable, ObservableObject {
         self.isBlank = (url.absoluteString == "about:blank")
         self.favicon = nil
         self.lastDialog = nil
+        if let pending = self.pendingDialog {
+            self.pendingDialog = nil
+            self.dialogTimeoutTask?.cancel()
+            self.dialogTimeoutTask = nil
+            pending.resolve(nil)
+        }
         webView.setMagnification(1.0, centeredAt: .zero)
         if webView.isLoading {
             webView.stopLoading()
@@ -977,23 +999,102 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
 
     // MARK: - Non-blocking JavaScript Alert / Confirm / Prompt handling
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
-        self.lastDialog = message
         appendConsoleEntry(level: .info, message: "[Dialog Alert] \(message)")
-        completionHandler()
+        if dialogPolicy.lowercased() == "wait" {
+            self.lastDialog = "[Alert: \(message)] -> waiting"
+            self.pendingDialog = PendingDialog(type: .alert, message: message, defaultText: nil, timestamp: Date(), resolve: { [weak self] _ in
+                self?.lastDialog = message
+                completionHandler()
+            })
+            scheduleDialogTimeout(for: message)
+        } else {
+            self.lastDialog = message
+            completionHandler()
+        }
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
-        let shouldAccept = (dialogPolicy.lowercased() != "dismiss")
-        self.lastDialog = "[Confirm: \(message)] -> \(shouldAccept ? "accepted" : "dismissed")"
-        appendConsoleEntry(level: .info, message: "[Dialog Confirm] \(message) -> \(shouldAccept ? "Accepted" : "Dismissed")")
-        completionHandler(shouldAccept)
+        appendConsoleEntry(level: .info, message: "[Dialog Confirm] \(message)")
+        if dialogPolicy.lowercased() == "wait" {
+            self.lastDialog = "[Confirm: \(message)] -> waiting"
+            self.pendingDialog = PendingDialog(type: .confirm, message: message, defaultText: nil, timestamp: Date(), resolve: { [weak self] result in
+                let shouldAccept = (result as? Bool) ?? false
+                self?.lastDialog = "[Confirm: \(message)] -> \(shouldAccept ? "accepted" : "dismissed")"
+                self?.appendConsoleEntry(level: .info, message: "[Dialog Confirm] \(message) -> \(shouldAccept ? "Accepted" : "Dismissed")")
+                completionHandler(shouldAccept)
+            })
+            scheduleDialogTimeout(for: message)
+        } else {
+            let shouldAccept = (dialogPolicy.lowercased() == "accept")
+            self.lastDialog = "[Confirm: \(message)] -> \(shouldAccept ? "accepted" : "dismissed")"
+            appendConsoleEntry(level: .info, message: "[Dialog Confirm] \(message) -> \(shouldAccept ? "Accepted" : "Dismissed")")
+            completionHandler(shouldAccept)
+        }
     }
 
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
-        let resp = dialogPromptResponse.isEmpty ? (defaultText ?? "") : dialogPromptResponse
-        self.lastDialog = "[Prompt: \(prompt)] -> \"\(resp)\""
-        appendConsoleEntry(level: .info, message: "[Dialog Prompt] \(prompt) -> \"\(resp)\"")
-        completionHandler(resp)
+        appendConsoleEntry(level: .info, message: "[Dialog Prompt] \(prompt)")
+        if dialogPolicy.lowercased() == "wait" {
+            self.lastDialog = "[Prompt: \(prompt)] -> waiting"
+            self.pendingDialog = PendingDialog(type: .prompt, message: prompt, defaultText: defaultText, timestamp: Date(), resolve: { [weak self] result in
+                if let respStr = result as? String {
+                    self?.lastDialog = "[Prompt: \(prompt)] -> \"\(respStr)\""
+                    self?.appendConsoleEntry(level: .info, message: "[Dialog Prompt] \(prompt) -> \"\(respStr)\"")
+                    completionHandler(respStr)
+                } else {
+                    self?.lastDialog = "[Prompt: \(prompt)] -> dismissed"
+                    self?.appendConsoleEntry(level: .info, message: "[Dialog Prompt] \(prompt) -> Dismissed")
+                    completionHandler(nil)
+                }
+            })
+            scheduleDialogTimeout(for: prompt)
+        } else if dialogPolicy.lowercased() == "accept" {
+            let resp = dialogPromptResponse.isEmpty ? (defaultText ?? "") : dialogPromptResponse
+            self.lastDialog = "[Prompt: \(prompt)] -> \"\(resp)\""
+            appendConsoleEntry(level: .info, message: "[Dialog Prompt] \(prompt) -> \"\(resp)\"")
+            completionHandler(resp)
+        } else {
+            self.lastDialog = "[Prompt: \(prompt)] -> dismissed"
+            appendConsoleEntry(level: .info, message: "[Dialog Prompt] \(prompt) -> Dismissed")
+            completionHandler(nil)
+        }
+    }
+
+    private func scheduleDialogTimeout(for message: String) {
+        dialogTimeoutTask?.cancel()
+        dialogTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled, let self = self, let pending = self.pendingDialog else { return }
+            self.appendConsoleEntry(level: .warn, message: "[Dialog Timeout] Unhandled \(pending.type.rawValue) dialog timed out after 30s. Auto-dismissing.")
+            self.pendingDialog = nil
+            pending.resolve(nil)
+        }
+    }
+
+    @discardableResult
+    func resolvePendingDialog(action: String, responseText: String? = nil) -> Bool {
+        guard let pending = self.pendingDialog else { return false }
+        self.pendingDialog = nil
+        self.dialogTimeoutTask?.cancel()
+        self.dialogTimeoutTask = nil
+
+        let act = action.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        switch pending.type {
+        case .confirm:
+            let shouldAccept = (act == "accept")
+            pending.resolve(shouldAccept)
+        case .alert:
+            pending.resolve(())
+        case .prompt:
+            if act == "dismiss" {
+                pending.resolve(nil)
+            } else {
+                let resp = responseText ?? self.dialogPromptResponse
+                let finalResp = resp.isEmpty ? (pending.defaultText ?? "") : resp
+                pending.resolve(finalResp)
+            }
+        }
+        return true
     }
 
     // MARK: - Programmatic & Interactive File Uploads

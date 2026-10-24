@@ -80,12 +80,14 @@ struct NomadAction: Codable {
     var optionText: String?
     var modifiers: [String]?
     var paths: [String]?
+    var dialogPolicy: String?
+    var dialogResponse: String?
 
     var resolvedPaths: [String] {
         paths ?? []
     }
 
-    init(action: String = "click", target: String? = nil, text: String? = nil, key: String? = nil, direction: String? = nil, amount: CGFloat? = nil, submit: Bool? = nil, blur: Bool? = nil, change: Bool? = nil, force: Bool? = nil, native: Bool? = nil, x: CGFloat? = nil, y: CGFloat? = nil, toX: CGFloat? = nil, toY: CGFloat? = nil, scrollDeltaY: CGFloat? = nil, scrollDeltaX: CGFloat? = nil, optionValue: String? = nil, optionText: String? = nil, modifiers: [String]? = nil, paths: [String]? = nil) {
+    init(action: String = "click", target: String? = nil, text: String? = nil, key: String? = nil, direction: String? = nil, amount: CGFloat? = nil, submit: Bool? = nil, blur: Bool? = nil, change: Bool? = nil, force: Bool? = nil, native: Bool? = nil, x: CGFloat? = nil, y: CGFloat? = nil, toX: CGFloat? = nil, toY: CGFloat? = nil, scrollDeltaY: CGFloat? = nil, scrollDeltaX: CGFloat? = nil, optionValue: String? = nil, optionText: String? = nil, modifiers: [String]? = nil, paths: [String]? = nil, dialogPolicy: String? = nil, dialogResponse: String? = nil) {
         self.action = action
         self.target = target
         self.text = text
@@ -107,6 +109,8 @@ struct NomadAction: Codable {
         self.optionText = optionText
         self.modifiers = modifiers
         self.paths = paths
+        self.dialogPolicy = dialogPolicy
+        self.dialogResponse = dialogResponse
     }
 
     enum CodingKeys: String, CodingKey {
@@ -114,6 +118,7 @@ struct NomadAction: Codable {
         case submit, blur, change, force, native, isNative, hardware, x, y, toX, toY
         case scrollDeltaY, deltaY, scrollDeltaX, deltaX, optionValue, optionText, modifiers
         case paths, path, files, file
+        case dialogPolicy, policy, dialogAction, dialogResponse, promptResponse
     }
 
     init(from decoder: Decoder) throws {
@@ -163,6 +168,17 @@ struct NomadAction: Codable {
         } else {
             self.paths = nil
         }
+
+        if let rawPolicy = (try? c.decodeIfPresent(String.self, forKey: .dialogPolicy)) ?? (try? c.decodeIfPresent(String.self, forKey: .policy)) {
+            let cleanPolicy = rawPolicy.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard ["accept", "dismiss", "wait"].contains(cleanPolicy) else {
+                throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Invalid dialog policy '\(rawPolicy)'. Expected 'accept', 'dismiss', or 'wait'"))
+            }
+            self.dialogPolicy = cleanPolicy
+        } else {
+            self.dialogPolicy = nil
+        }
+        self.dialogResponse = (try? c.decodeIfPresent(String.self, forKey: .dialogResponse)) ?? (try? c.decodeIfPresent(String.self, forKey: .promptResponse))
     }
 
     func encode(to encoder: Encoder) throws {
@@ -188,6 +204,8 @@ struct NomadAction: Codable {
         try c.encodeIfPresent(optionText, forKey: .optionText)
         try c.encodeIfPresent(modifiers, forKey: .modifiers)
         try c.encodeIfPresent(paths, forKey: .paths)
+        try c.encodeIfPresent(dialogPolicy, forKey: .dialogPolicy)
+        try c.encodeIfPresent(dialogResponse, forKey: .dialogResponse)
     }
 }
 
@@ -208,8 +226,10 @@ struct NomadActionResult: Codable {
     var count: Int? = nil
     var native: Bool? = nil
     var isTrusted: Bool? = nil
+    var lastDialog: String? = nil
+    var hasPendingDialog: Bool? = nil
 
-    init(success: Bool, message: String, elementId: String? = nil, obscured: Bool? = nil, interceptedBy: String? = nil, healed: Bool? = nil, staleRef: Bool? = nil, code: String? = nil, stack: String? = nil, error: String? = nil, files: [String]? = nil, count: Int? = nil, native: Bool? = nil, isTrusted: Bool? = nil) {
+    init(success: Bool, message: String, elementId: String? = nil, obscured: Bool? = nil, interceptedBy: String? = nil, healed: Bool? = nil, staleRef: Bool? = nil, code: String? = nil, stack: String? = nil, error: String? = nil, files: [String]? = nil, count: Int? = nil, native: Bool? = nil, isTrusted: Bool? = nil, lastDialog: String? = nil, hasPendingDialog: Bool? = nil) {
         self.success = success
         self.message = message
         self.elementId = elementId
@@ -224,6 +244,8 @@ struct NomadActionResult: Codable {
         self.count = count
         self.native = native
         self.isTrusted = isTrusted
+        self.lastDialog = lastDialog
+        self.hasPendingDialog = hasPendingDialog
     }
 }
 
@@ -2116,31 +2138,42 @@ extension Tab {
     @MainActor
     func performAction(_ action: NomadAction) async throws -> NomadActionResult {
         self.lastActionTime = Date()
+        if let dp = action.dialogPolicy {
+            self.dialogPolicy = dp
+        }
+        if let dr = action.dialogResponse {
+            self.dialogPromptResponse = dr
+        }
         await waitForNavigationSettled(timeout: 0.4)
         if webView.isLoading {
-            return NomadActionResult(success: false, message: "Cannot execute action '\(action.action)': active page is currently navigating. Wait for navigation to complete before dispatching actions.", elementId: action.target)
+            return NomadActionResult(success: false, message: "Cannot execute action '\(action.action)': active page is currently navigating. Wait for navigation to complete before dispatching actions.", elementId: action.target, lastDialog: self.lastDialog, hasPendingDialog: self.pendingDialog != nil)
         }
 
         // Native AppKit & CoreGraphics hardware input dispatch (isTrusted: true)
         let isNative = (action.native == true) || action.action.lowercased().hasPrefix("native_")
         if isNative {
-            return try await performNativeAction(action)
+            var nativeRes = try await performNativeAction(action)
+            nativeRes.lastDialog = self.lastDialog
+            if self.pendingDialog != nil {
+                nativeRes.hasPendingDialog = true
+            }
+            return nativeRes
         }
 
         // Programmatic file upload staging & validation
         if action.action.lowercased() == "upload" {
             let paths = action.resolvedPaths
             guard !paths.isEmpty else {
-                return NomadActionResult(success: false, message: "Missing required 'paths' or 'files' for upload action", elementId: action.target, code: "MISSING_PATHS")
+                return NomadActionResult(success: false, message: "Missing required 'paths' or 'files' for upload action", elementId: action.target, code: "MISSING_PATHS", lastDialog: self.lastDialog, hasPendingDialog: self.pendingDialog != nil)
             }
             var validatedURLs: [URL] = []
             for path in paths {
                 let expanded = (path as NSString).expandingTildeInPath
                 guard FileManager.default.fileExists(atPath: expanded) else {
-                    return NomadActionResult(success: false, message: "File not found at path: \(path)", elementId: action.target, code: "FILE_NOT_FOUND")
+                    return NomadActionResult(success: false, message: "File not found at path: \(path)", elementId: action.target, code: "FILE_NOT_FOUND", lastDialog: self.lastDialog, hasPendingDialog: self.pendingDialog != nil)
                 }
                 guard FileManager.default.isReadableFile(atPath: expanded) else {
-                    return NomadActionResult(success: false, message: "File is not readable at path: \(path)", elementId: action.target, code: "FILE_NOT_READABLE")
+                    return NomadActionResult(success: false, message: "File is not readable at path: \(path)", elementId: action.target, code: "FILE_NOT_READABLE", lastDialog: self.lastDialog, hasPendingDialog: self.pendingDialog != nil)
                 }
                 validatedURLs.append(URL(fileURLWithPath: expanded))
             }
@@ -2155,7 +2188,7 @@ extension Tab {
         do {
             let resultString = try await webView.evaluateJavaScript("JSON.stringify(window.__nomad.performAction(\(actionJSON)))") as? String ?? "{}"
             guard let resultData = resultString.data(using: .utf8) else {
-                return NomadActionResult(success: false, message: "Failed to parse action result JSON", elementId: action.target, code: "ACTION_PARSE_ERROR")
+                return NomadActionResult(success: false, message: "Failed to parse action result JSON", elementId: action.target, code: "ACTION_PARSE_ERROR", lastDialog: self.lastDialog, hasPendingDialog: self.pendingDialog != nil)
             }
             var res = try JSONDecoder().decode(NomadActionResult.self, from: resultData)
             if action.action.lowercased() == "upload" {
@@ -2167,10 +2200,14 @@ extension Tab {
                     self.clearStagedUpload()
                 }
             }
+            res.lastDialog = self.lastDialog
+            if self.pendingDialog != nil {
+                res.hasPendingDialog = true
+            }
             return res
         } catch let decodeErr as DecodingError {
             if action.action.lowercased() == "upload" { self.clearStagedUpload() }
-            return NomadActionResult(success: false, message: "Failed to decode action result: \(decodeErr.localizedDescription)", elementId: action.target, code: "ACTION_DECODE_ERROR")
+            return NomadActionResult(success: false, message: "Failed to decode action result: \(decodeErr.localizedDescription)", elementId: action.target, code: "ACTION_DECODE_ERROR", lastDialog: self.lastDialog, hasPendingDialog: self.pendingDialog != nil)
         } catch {
             if action.action.lowercased() == "upload" { self.clearStagedUpload() }
             return NomadActionResult(
@@ -2178,7 +2215,9 @@ extension Tab {
                 message: "JavaScript evaluation failed: \(error.localizedDescription)",
                 elementId: action.target,
                 code: "ACTION_EVALUATION_ERROR",
-                error: error.localizedDescription
+                error: error.localizedDescription,
+                lastDialog: self.lastDialog,
+                hasPendingDialog: self.pendingDialog != nil
             )
         }
     }
@@ -2252,6 +2291,12 @@ extension Tab {
     /// Synthesizes native AppKit and CoreGraphics input events delivering true OS-level user gestures (isTrusted: true).
     @MainActor
     func performNativeAction(_ action: NomadAction) async throws -> NomadActionResult {
+        if let dp = action.dialogPolicy {
+            self.dialogPolicy = dp
+        }
+        if let dr = action.dialogResponse {
+            self.dialogPromptResponse = dr
+        }
         await ensureNomadScriptInjected()
 
         // 1. Resolve target coordinates and element properties in web view viewport space
@@ -2347,6 +2392,7 @@ extension Tab {
                 cgUp.postToPid(ProcessInfo.processInfo.processIdentifier)
             }
             if let up = upEvent { webView.mouseUp(with: up) }
+            try? await Task.sleep(nanoseconds: 30_000_000)
 
             return NomadActionResult(
                 success: true,
@@ -2354,7 +2400,9 @@ extension Tab {
                 elementId: action.target,
                 code: "SUCCESS",
                 native: true,
-                isTrusted: true
+                isTrusted: true,
+                lastDialog: self.lastDialog,
+                hasPendingDialog: self.pendingDialog != nil
             )
 
         case "hover":

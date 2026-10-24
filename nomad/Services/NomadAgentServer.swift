@@ -441,7 +441,8 @@ final class NomadAgentServer: ObservableObject {
                 "snapshotModes": ["text", "json"],
                 "cookies": ["get", "set", "clear"],
                 "console": ["log", "warn", "error"],
-                "network": ["fetch", "xhr", "status", "timing"]
+                "network": ["fetch", "xhr", "status", "timing"],
+                "dialogPolicies": ["accept", "dismiss", "wait"]
             ]
             let liveTitle = (store.activeTab?.webView.title?.isEmpty == false ? store.activeTab?.webView.title : store.activeTab?.title) ?? ""
             let liveURL = (store.activeTab?.webView.url?.absoluteString ?? store.activeTab?.url?.absoluteString) ?? ""
@@ -454,6 +455,7 @@ final class NomadAgentServer: ObservableObject {
                 "activeURL": liveURL,
                 "activeTitle": liveTitle,
                 "lastDialog": (store.activeTab?.lastDialog as Any?) ?? NSNull(),
+                "hasPendingDialog": store.activeTab?.pendingDialog != nil,
                 "capabilities": capabilities
             ]
             sendJSON(connection: connection, object: statusObj, origin: origin)
@@ -966,27 +968,83 @@ final class NomadAgentServer: ObservableObject {
                 sendJSON(connection: connection, object: ["success": false, "error": error.localizedDescription, "code": "SNAPSHOT_ERROR"], origin: origin)
             }
 
-        case ("POST", "/dialog"):
-            guard let activeTab = requireTab() else { return }
-            if let bodyData = bodyData, !bodyData.isEmpty {
+        case ("GET", "/dialog"), ("POST", "/dialog"):
+            var targetTabId = queryItem("tabId")
+            var bodyJson: [String: Any]? = nil
+            if method == "POST", let bodyData = bodyData, !bodyData.isEmpty {
                 guard let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
-                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in dialog body\"}", origin: origin)
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in dialog body\",\"code\":\"MALFORMED_JSON\",\"success\":false}", origin: origin)
                     return
                 }
-                if let policy = json["policy"] as? String {
-                    activeTab.dialogPolicy = policy
-                }
-                if let response = (json["response"] as? String) ?? (json["promptResponse"] as? String) {
-                    activeTab.dialogPromptResponse = response
-                }
+                bodyJson = json
+                if let t = json["tabId"] as? String { targetTabId = t }
             }
-            sendJSON(connection: connection, object: [
+
+            guard let activeTab = requireTab(id: targetTabId) else { return }
+
+            let rawPolicy = (bodyJson?["policy"] as? String) ?? queryItem("policy")
+            let rawAction = (bodyJson?["action"] as? String) ?? queryItem("action")
+            let rawResponse = (bodyJson?["response"] as? String) ?? (bodyJson?["promptResponse"] as? String) ?? queryItem("response") ?? queryItem("promptResponse")
+
+            // 1. Validate 'policy' if provided
+            if let rawPolicy = rawPolicy {
+                let cleanPolicy = rawPolicy.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                guard ["accept", "dismiss", "wait"].contains(cleanPolicy) else {
+                    sendResponse(
+                        connection: connection,
+                        status: "400 Bad Request",
+                        body: "{\"error\":\"Invalid dialog policy '\(rawPolicy)'. Expected 'accept', 'dismiss', or 'wait'\",\"code\":\"INVALID_POLICY\",\"success\":false}",
+                        origin: origin
+                    )
+                    return
+                }
+                activeTab.dialogPolicy = cleanPolicy
+            }
+
+            // 2. Validate 'action' if provided
+            var actionToResolve: String? = nil
+            if let rawAction = rawAction {
+                let cleanAction = rawAction.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                guard ["accept", "dismiss"].contains(cleanAction) else {
+                    sendResponse(
+                        connection: connection,
+                        status: "400 Bad Request",
+                        body: "{\"error\":\"Invalid dialog action '\(rawAction)'. Expected 'accept' or 'dismiss'\",\"code\":\"INVALID_ACTION\",\"success\":false}",
+                        origin: origin
+                    )
+                    return
+                }
+                actionToResolve = cleanAction
+            }
+
+            // 3. Update prompt response text if provided
+            if let response = rawResponse {
+                activeTab.dialogPromptResponse = response
+            }
+
+            // 4. If a dialog is waiting and an action or non-wait policy was specified, resolve it!
+            let effectiveAction = actionToResolve ?? (activeTab.dialogPolicy == "wait" ? nil : activeTab.dialogPolicy)
+            if let resolveAct = effectiveAction, activeTab.pendingDialog != nil {
+                activeTab.resolvePendingDialog(action: resolveAct, responseText: activeTab.dialogPromptResponse)
+            }
+
+            var respObj: [String: Any] = [
                 "success": true,
                 "policy": activeTab.dialogPolicy,
                 "response": activeTab.dialogPromptResponse,
                 "promptResponse": activeTab.dialogPromptResponse,
-                "lastDialog": (activeTab.lastDialog as Any?) ?? NSNull()
-            ], origin: origin)
+                "lastDialog": (activeTab.lastDialog as Any?) ?? NSNull(),
+                "hasPendingDialog": activeTab.pendingDialog != nil
+            ]
+            if let pending = activeTab.pendingDialog {
+                var pObj: [String: Any] = [
+                    "type": pending.type.rawValue,
+                    "message": pending.message
+                ]
+                if let def = pending.defaultText { pObj["defaultText"] = def }
+                respObj["pendingDialog"] = pObj
+            }
+            sendJSON(connection: connection, object: respObj, origin: origin)
 
         case ("GET", "/screenshot"), ("POST", "/screenshot"):
             guard let activeTab = requireTab(id: queryItem("tabId")) else { return }
@@ -1071,7 +1129,8 @@ final class NomadAgentServer: ObservableObject {
                 @unknown default:
                     msg = decodingError.localizedDescription
                 }
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(msg)\",\"code\":\"INVALID_ACTION_PAYLOAD\",\"success\":false}", origin: origin)
+                let code = msg.contains("dialog policy") ? "INVALID_POLICY" : "INVALID_ACTION_PAYLOAD"
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(msg)\",\"code\":\"\(code)\",\"success\":false}", origin: origin)
             } catch {
                 sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(error.localizedDescription)\",\"code\":\"ACTION_ERROR\",\"success\":false}", origin: origin)
             }
