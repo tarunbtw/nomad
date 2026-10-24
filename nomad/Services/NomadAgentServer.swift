@@ -232,7 +232,7 @@ final class NomadAgentServer: ObservableObject {
     nonisolated private func processRequest(data: Data, connection: NWConnection) {
         // Extract headers and body
         guard let headerEndRange = data.range(of: Data("\r\n\r\n".utf8)) else {
-            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed HTTP request\"}")
+            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed HTTP request\",\"code\":\"MALFORMED_REQUEST\",\"success\":false}")
             return
         }
 
@@ -240,19 +240,19 @@ final class NomadAgentServer: ObservableObject {
         let bodyData = headerEndRange.upperBound < data.count ? data.subdata(in: headerEndRange.upperBound..<data.count) : nil
 
         guard let headerString = String(data: headerData, encoding: .utf8) else {
-            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid UTF-8 in headers\"}")
+            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid UTF-8 in headers\",\"code\":\"INVALID_HEADERS\",\"success\":false}")
             return
         }
 
         let lines = headerString.components(separatedBy: "\r\n")
         guard let requestLine = lines.first, !requestLine.isEmpty else {
-            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Empty request\"}")
+            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Empty request\",\"code\":\"EMPTY_REQUEST\",\"success\":false}")
             return
         }
 
         let parts = requestLine.components(separatedBy: " ")
         guard parts.count >= 2 else {
-            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed HTTP request line\"}")
+            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed HTTP request line\",\"code\":\"MALFORMED_REQUEST_LINE\",\"success\":false}")
             return
         }
 
@@ -282,14 +282,14 @@ final class NomadAgentServer: ObservableObject {
         let origin = headers["origin"]
 
         guard let store = self.store else {
-            sendResponse(connection: connection, status: "503 Service Unavailable", body: "{\"error\":\"BrowserStore not connected\"}", origin: origin)
+            sendResponse(connection: connection, status: "503 Service Unavailable", body: "{\"error\":\"BrowserStore not connected\",\"code\":\"SERVICE_UNAVAILABLE\",\"success\":false}", origin: origin)
             return
         }
 
         // Validate Origin header against DNS rebinding & cross-site exfiltration attacks
         if !Self.isAllowedOrigin(origin) {
             print("🛡️ [NomadAgentServer] Blocked cross-origin request from untrusted origin: \(origin ?? "unknown")")
-            sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"Forbidden: cross-origin requests from untrusted web origins are blocked by Nomad security policy.\"}", origin: nil)
+            sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"Forbidden: cross-origin requests from untrusted web origins are blocked by Nomad security policy.\",\"code\":\"FORBIDDEN\",\"success\":false}", origin: nil)
             return
         }
 
@@ -345,7 +345,7 @@ final class NomadAgentServer: ObservableObject {
                 sendJSON(connection: connection, object: publicStatusObj, origin: origin)
                 return
             } else {
-                sendResponse(connection: connection, status: "401 Unauthorized", body: "{\"error\":\"Unauthorized: valid Bearer token required in Authorization header or ~/.nomad/agent-token\"}", origin: origin)
+                sendResponse(connection: connection, status: "401 Unauthorized", body: "{\"error\":\"Unauthorized: valid Bearer token required in Authorization header or ~/.nomad/agent-token\",\"code\":\"UNAUTHORIZED\",\"success\":false}", origin: origin)
                 return
             }
         }
@@ -361,14 +361,18 @@ final class NomadAgentServer: ObservableObject {
         func requireTab(id: String? = nil, errorMessage: String? = nil) -> Tab? {
             guard let tab = resolveTab(id: id) else {
                 let msg: String
+                let code: String
                 if let errorMessage = errorMessage {
                     msg = errorMessage
+                    code = "TAB_NOT_FOUND"
                 } else if let id = id, !id.isEmpty {
                     msg = "Tab not found with id '\(id)'"
+                    code = "TAB_NOT_FOUND"
                 } else {
                     msg = "No active tab"
+                    code = "NO_ACTIVE_TAB"
                 }
-                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"\(msg)\"}", origin: origin)
+                sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"\(msg)\",\"code\":\"\(code)\",\"success\":false}", origin: origin)
                 return nil
             }
             return tab
@@ -378,14 +382,14 @@ final class NomadAgentServer: ObservableObject {
             switch action {
             case "back":
                 if !tab.canGoBack {
-                    sendJSON(connection: connection, object: ["success": false, "action": "back", "message": "Cannot go back: navigation history is empty"], origin: origin)
+                    sendJSON(connection: connection, object: ["success": false, "action": "back", "code": "CANNOT_GO_BACK", "error": "Cannot go back: navigation history is empty", "message": "Cannot go back: navigation history is empty"], origin: origin)
                 } else {
                     store.goBack()
                     sendJSON(connection: connection, object: ["success": true, "action": "back"], origin: origin)
                 }
             case "forward":
                 if !tab.canGoForward {
-                    sendJSON(connection: connection, object: ["success": false, "action": "forward", "message": "Cannot go forward: navigation history is empty"], origin: origin)
+                    sendJSON(connection: connection, object: ["success": false, "action": "forward", "code": "CANNOT_GO_FORWARD", "error": "Cannot go forward: navigation history is empty", "message": "Cannot go forward: navigation history is empty"], origin: origin)
                 } else {
                     store.goForward()
                     sendJSON(connection: connection, object: ["success": true, "action": "forward"], origin: origin)
@@ -427,7 +431,9 @@ final class NomadAgentServer: ObservableObject {
             sendJSON(connection: connection, object: ["success": true, "deletedCount": deletedCount, "domain": host], origin: origin)
         }
 
-        switch (method, path) {
+        let cleanPath = (path.count > 1 && path.hasSuffix("/")) ? String(path.dropLast()) : path
+
+        switch (method, cleanPath) {
         case ("GET", "/"), ("GET", "/status"):
             let capabilities: [String: Any] = [
                 "waitModes": ["stability", "selector", "timeout", "networkidle", "navigation", "url"],
@@ -532,11 +538,11 @@ final class NomadAgentServer: ObservableObject {
 
         case ("POST", "/navigate"):
             guard let bodyData = bodyData, !bodyData.isEmpty else {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing body in /navigate\"}", origin: origin)
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing body in /navigate\",\"code\":\"MISSING_BODY\",\"success\":false}", origin: origin)
                 return
             }
             guard let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in request body\"}", origin: origin)
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in request body\",\"code\":\"MALFORMED_JSON\",\"success\":false}", origin: origin)
                 return
             }
             let tid = (json["tabId"] as? String) ?? queryItem("tabId")
@@ -547,27 +553,27 @@ final class NomadAgentServer: ObservableObject {
                 handleNavAction(action!, tab: activeTab)
             default:
                 guard let urlStr = json["url"] as? String, let url = URL(string: urlStr), let scheme = url.scheme?.lowercased() else {
-                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing or invalid url in body\"}", origin: origin)
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing or invalid url in body\",\"code\":\"INVALID_URL\",\"success\":false}", origin: origin)
                     return
                 }
                 if scheme == "javascript" {
-                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"javascript: URLs are not permitted in navigate. Use /evaluate instead.\"}", origin: origin)
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"javascript: URLs are not permitted in navigate. Use /evaluate instead.\",\"code\":\"INVALID_URL_SCHEME\",\"success\":false}", origin: origin)
                     return
                 }
                 let allowLocal = (json["allowLocalFiles"] as? Bool) ?? false
                 if scheme == "file" {
                     if !allowLocal {
-                        sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"file:// URLs are disabled by default. Pass allowLocalFiles: true to navigate local files.\"}", origin: origin)
+                        sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"file:// URLs are disabled by default. Pass allowLocalFiles: true to navigate local files.\",\"code\":\"FILE_URLS_DISABLED\",\"success\":false}", origin: origin)
                         return
                     }
                     let filePath = url.path
                     if !FileManager.default.fileExists(atPath: filePath) {
-                        sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"File not found at path '\(filePath)'\",\"success\":false}", origin: origin)
+                        sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"File not found at path '\(filePath)'\",\"code\":\"FILE_NOT_FOUND\",\"success\":false}", origin: origin)
                         return
                     }
                     let pathLower = filePath.lowercased()
                     if pathLower.contains("/.ssh") || pathLower.contains("/.nomad") || pathLower.contains("/library/keychains") || pathLower.contains("/etc/master.passwd") || pathLower.contains("/etc/sudoers") {
-                        sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"Access to sensitive directory or credential file is blocked by Nomad security policy.\"}", origin: origin)
+                        sendResponse(connection: connection, status: "403 Forbidden", body: "{\"error\":\"Access to sensitive directory or credential file is blocked by Nomad security policy.\",\"code\":\"ACCESS_DENIED\",\"success\":false}", origin: origin)
                         return
                     }
                 }
@@ -589,9 +595,9 @@ final class NomadAgentServer: ObservableObject {
                     }
                 }
                 if superseded {
-                    sendJSON(connection: connection, object: ["success": false, "cancelled": true, "reason": "superseded", "navigatedTo": url.absoluteString], origin: origin)
+                    sendJSON(connection: connection, object: ["success": false, "cancelled": true, "code": "NAVIGATION_SUPERSEDED", "reason": "superseded", "navigatedTo": url.absoluteString], origin: origin)
                 } else if let navError = navError {
-                    sendJSON(connection: connection, object: ["success": false, "error": navError, "navigatedTo": url.absoluteString], origin: origin)
+                    sendJSON(connection: connection, object: ["success": false, "error": navError, "code": "NAVIGATION_FAILED", "navigatedTo": url.absoluteString], origin: origin)
                 } else {
                     sendJSON(connection: connection, object: ["success": true, "navigatedTo": url.absoluteString], origin: origin)
                 }
@@ -645,12 +651,12 @@ final class NomadAgentServer: ObservableObject {
                     let result = try await activeTab.waitForStability(quietMs: quietMs, timeoutMs: timeoutMs)
                     sendJSON(connection: connection, object: result, origin: origin)
                 } catch {
-                    sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\"}", origin: origin)
+                    sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"\(error.localizedDescription)\",\"code\":\"WAIT_ERROR\",\"success\":false}", origin: origin)
                 }
 
             case "selector":
                 guard !selector.isEmpty else {
-                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing selector string\"}", origin: origin)
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing selector string\",\"code\":\"MISSING_SELECTOR\",\"success\":false}", origin: origin)
                     return
                 }
                 let startTime = Date()
@@ -788,7 +794,7 @@ final class NomadAgentServer: ObservableObject {
                 sendJSON(connection: connection, object: ["success": true, "waitedMs": durationMs], origin: origin)
 
             default:
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Unknown wait mode: \(mode)\"}", origin: origin)
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Unknown wait mode: \(mode)\",\"code\":\"INVALID_WAIT_MODE\",\"success\":false}", origin: origin)
             }
 
         case ("GET", "/cookies"):
@@ -821,11 +827,11 @@ final class NomadAgentServer: ObservableObject {
 
         case ("POST", "/cookies"):
             guard let bodyData = bodyData, !bodyData.isEmpty else {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing cookie JSON body\"}", origin: origin)
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing cookie JSON body\",\"code\":\"MISSING_BODY\",\"success\":false}", origin: origin)
                 return
             }
             guard let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in cookie request body\"}", origin: origin)
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in cookie request body\",\"code\":\"MALFORMED_JSON\",\"success\":false}", origin: origin)
                 return
             }
             let tid = (json["tabId"] as? String) ?? queryItem("tabId")
@@ -879,7 +885,7 @@ final class NomadAgentServer: ObservableObject {
             }
 
             if cookiesToSet.isEmpty {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"No cookie definition provided to set (expected 'name' and 'value' or 'cookies' array)\"}", origin: origin)
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"No cookie definition provided to set (expected 'name' and 'value' or 'cookies' array)\",\"code\":\"INVALID_COOKIE\",\"success\":false}", origin: origin)
                 return
             }
 
@@ -926,23 +932,40 @@ final class NomadAgentServer: ObservableObject {
             }
             await executeClearCookies(tab: activeTab, targetDomain: targetDomain, allDomains: allDomains)
 
-        case ("GET", "/snapshot"):
+        case ("GET", "/snapshot"), ("GET", "/tree"), ("POST", "/snapshot"), ("POST", "/tree"):
             guard let activeTab = requireTab(id: queryItem("tabId")) else { return }
             var limit = queryItem("limit").flatMap(Int.init) ?? 100
             var offset = queryItem("offset").flatMap(Int.init) ?? 0
             var viewportOnly = queryBool("viewportOnly")
             var includeText = (queryItem("includeText") != "false" && queryItem("includeText") != "0")
-            var mode = queryItem("mode")?.lowercased()
+            var mode = queryItem("mode")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            var roleFilter = queryItem("role")?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var textFilter = queryItem("text")?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let bodyData = bodyData,
                let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] {
                 if let l = json["limit"] as? Int { limit = l }
                 if let o = json["offset"] as? Int { offset = o }
                 if let v = json["viewportOnly"] as? Bool { viewportOnly = v }
                 if let it = json["includeText"] as? Bool { includeText = it }
-                if let m = json["mode"] as? String { mode = m.lowercased() }
+                if let m = json["mode"] as? String { mode = m.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                if let r = json["role"] as? String { roleFilter = r.trimmingCharacters(in: .whitespacesAndNewlines) }
+                if let t = json["text"] as? String { textFilter = t.trimmingCharacters(in: .whitespacesAndNewlines) }
+            }
+            if let m = mode, !m.isEmpty {
+                guard ["text", "summary", "json", "full"].contains(m) else {
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid snapshot mode '\(m)'. Expected 'text' or 'json'\",\"code\":\"INVALID_MODE\",\"success\":false}", origin: origin)
+                    return
+                }
             }
             do {
-                let snapshot = try await activeTab.getSemanticTree(limit: limit, offset: offset, viewportOnly: viewportOnly, includeText: includeText)
+                let snapshot = try await activeTab.getSemanticTree(
+                    limit: limit,
+                    offset: offset,
+                    viewportOnly: viewportOnly,
+                    includeText: includeText,
+                    role: (roleFilter?.isEmpty == false) ? roleFilter : nil,
+                    text: (textFilter?.isEmpty == false) ? textFilter : nil
+                )
                 if mode == "json" || mode == "full" {
                     var fullSnapshot = snapshot
                     // Compute accurate full token estimate including the elements array
@@ -962,6 +985,8 @@ final class NomadAgentServer: ObservableObject {
                         "tokenEstimate": textTokens
                     ]
                     if let te = snapshot.totalElements { resp["totalElements"] = te }
+                    if let ft = snapshot.filteredTotal { resp["filteredTotal"] = ft }
+                    if let ut = snapshot.unfilteredTotal { resp["unfilteredTotal"] = ut }
                     sendJSON(connection: connection, object: resp, origin: origin)
                 }
             } catch {
@@ -1054,14 +1079,14 @@ final class NomadAgentServer: ObservableObject {
             if let clipStr = queryItem("clip") {
                 let parts = clipStr.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
                 guard parts.count == 4, parts[2] > 0, parts[3] > 0, !parts[0].isNaN, !parts[1].isNaN, !parts[2].isNaN, !parts[3].isNaN else {
-                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid clip parameter. Expected 4 positive numbers x,y,width,height\",\"success\":false}", origin: origin)
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid clip parameter. Expected 4 positive numbers x,y,width,height\",\"code\":\"INVALID_CLIP\",\"success\":false}", origin: origin)
                     return
                 }
                 clipRect = CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
             }
             if let bodyData = bodyData, !bodyData.isEmpty {
                 guard let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
-                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in screenshot body\",\"success\":false}", origin: origin)
+                    sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in screenshot body\",\"code\":\"MALFORMED_JSON\",\"success\":false}", origin: origin)
                     return
                 }
                 if let labeledBool = json["labeled"] as? Bool { isLabeled = labeledBool }
@@ -1077,12 +1102,12 @@ final class NomadAgentServer: ObservableObject {
                     } else if let clipStr = clipRaw as? String {
                         let parts = clipStr.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
                         guard parts.count == 4, parts[2] > 0, parts[3] > 0, !parts[0].isNaN, !parts[1].isNaN, !parts[2].isNaN, !parts[3].isNaN else {
-                            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid clip string in body. Expected x,y,width,height with positive dimensions\",\"success\":false}", origin: origin)
+                            sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid clip string in body. Expected x,y,width,height with positive dimensions\",\"code\":\"INVALID_CLIP\",\"success\":false}", origin: origin)
                             return
                         }
                         clipRect = CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
                     } else {
-                        sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid clip object. Expected {x, y, width > 0, height > 0}\",\"success\":false}", origin: origin)
+                        sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Invalid clip object. Expected {x, y, width > 0, height > 0}\",\"code\":\"INVALID_CLIP\",\"success\":false}", origin: origin)
                         return
                     }
                 }
@@ -1092,10 +1117,12 @@ final class NomadAgentServer: ObservableObject {
                 if let png = image.pngData {
                     sendRaw(connection: connection, contentType: "image/png", data: png, origin: origin)
                 } else {
-                    sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"Failed to encode PNG data\"}", origin: origin)
+                    sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"Failed to encode PNG data\",\"code\":\"PNG_ENCODE_FAILED\",\"success\":false}", origin: origin)
                 }
             } catch {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(error.localizedDescription)\",\"success\":false}", origin: origin)
+                let errMsg = error.localizedDescription
+                let code = errMsg.contains("not found") ? "ELEMENT_NOT_FOUND" : "SCREENSHOT_ERROR"
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"\(errMsg)\",\"code\":\"\(code)\",\"success\":false}", origin: origin)
             }
 
         case ("POST", "/action"):
@@ -1230,15 +1257,15 @@ final class NomadAgentServer: ObservableObject {
 
         case ("POST", "/evaluate"):
             guard let bodyData = bodyData, !bodyData.isEmpty else {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing body in /evaluate\"}", origin: origin)
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing body in /evaluate\",\"code\":\"MISSING_BODY\",\"success\":false}", origin: origin)
                 return
             }
             guard let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] else {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in evaluate body\"}", origin: origin)
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Malformed JSON in evaluate body\",\"code\":\"MALFORMED_JSON\",\"success\":false}", origin: origin)
                 return
             }
             guard let script = (json["script"] as? String) ?? (json["expression"] as? String) else {
-                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing script or expression string in body\"}", origin: origin)
+                sendResponse(connection: connection, status: "400 Bad Request", body: "{\"error\":\"Missing script or expression string in body\",\"code\":\"MISSING_SCRIPT\",\"success\":false}", origin: origin)
                 return
             }
             let tid = json["tabId"] as? String
@@ -1421,7 +1448,7 @@ final class NomadAgentServer: ObservableObject {
             sendJSON(connection: connection, object: ["success": true, "cleared": true], origin: origin)
 
         default:
-            sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"Endpoint not found: \(method) \(path)\"}", origin: origin)
+            sendResponse(connection: connection, status: "404 Not Found", body: "{\"error\":\"Endpoint not found: \(method) \(path)\",\"code\":\"NOT_FOUND\",\"success\":false}", origin: origin)
         }
     }
 
@@ -1431,7 +1458,7 @@ final class NomadAgentServer: ObservableObject {
         if let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]) {
             sendRaw(connection: connection, status: status, contentType: "application/json; charset=utf-8", data: data, origin: origin)
         } else {
-            sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"JSON encoding error\"}", origin: origin)
+            sendResponse(connection: connection, status: "500 Internal Server Error", body: "{\"error\":\"JSON encoding error\",\"code\":\"INTERNAL_ERROR\",\"success\":false}", origin: origin)
         }
     }
 

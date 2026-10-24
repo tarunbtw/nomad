@@ -235,10 +235,31 @@ enum WebKitPool {
                             var tag = el.tagName.toLowerCase();
                             var domId = el.id ? String(el.id).trim() : null;
                             var text = (el.getAttribute('aria-label') || el.placeholder || el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 120);
+                            if (!text && (tag === 'input' || tag === 'select' || tag === 'textarea')) {
+                                if (el.id) {
+                                    var lbl = document.querySelector('label[for="' + el.id + '"]');
+                                    if (lbl) text = (lbl.innerText || lbl.textContent || '').trim();
+                                }
+                                if (!text && el.closest) {
+                                    var parentLbl = el.closest('label');
+                                    if (parentLbl) {
+                                        var cloned = parentLbl.cloneNode(true);
+                                        var chInputs = cloned.querySelectorAll('input, select, textarea');
+                                        for (var ci = 0; ci < chInputs.length; ci++) chInputs[ci].remove();
+                                        text = (cloned.innerText || cloned.textContent || '').trim();
+                                    }
+                                }
+                            }
                             if (!text && (tag === 'canvas' || el.draggable === true || el.id === 'hit')) {
                                 text = domId ? ('#' + domId) : (tag === 'canvas' ? 'canvas' : '');
                             }
                             var val = (tag === 'input' || tag === 'textarea' || tag === 'select') ? String(el.value || '').substring(0, 50) : null;
+                            var rawType = (el.type || el.getAttribute('type') || '').toLowerCase();
+                            var isChecked = Boolean(
+                                el.checked ||
+                                el.getAttribute('aria-checked') === 'true' ||
+                                (el.querySelector && el.querySelector('input') && (el.querySelector('input').checked || el.querySelector('input').getAttribute('aria-checked') === 'true'))
+                            );
                             
                             list.push({
                                 id: id,
@@ -247,7 +268,11 @@ enum WebKitPool {
                                 role: el.getAttribute('role') || tag,
                                 text: text,
                                 value: val,
-                                type: el.getAttribute('type') || null,
+                                type: rawType || null,
+                                checked: isChecked,
+                                disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true'),
+                                selected: Boolean(el.selected || el.getAttribute('aria-selected') === 'true'),
+                                readOnly: Boolean(el.readOnly || el.getAttribute('aria-readonly') === 'true'),
                                 bounds: {
                                     x: Math.round(rect.left),
                                     y: Math.round(rect.top),
@@ -271,6 +296,10 @@ enum WebKitPool {
                                     text: bText,
                                     value: null,
                                     type: null,
+                                    checked: false,
+                                    disabled: false,
+                                    selected: false,
+                                    readOnly: false,
                                     bounds: {
                                         x: Math.max(0, Math.round(br.left)),
                                         y: Math.max(0, Math.round(br.top)),
@@ -306,9 +335,9 @@ enum WebKitPool {
                                 });
                             } catch(e) {}
                         }
-                        return elements.length;
+                        return payload;
                     } catch(e) {
-                        return 0;
+                        return { type: '__nomad_frame_report', frameId: assignedId, url: '', title: '', elements: [] };
                     }
                 }
 
@@ -319,9 +348,10 @@ enum WebKitPool {
                         if (e.data.frameId) {
                             window.__nomad_frame_id = e.data.frameId;
                         }
-                        var count = reportToTop(e.data.frameId);
+                        var fid = e.data.frameId || window.__nomad_frame_id || null;
+                        var rep = reportToTop(fid);
                         if (e.ports && e.ports[0]) {
-                            try { e.ports[0].postMessage({ success: true, count: count, frameId: e.data.frameId }); } catch(err) {}
+                            try { e.ports[0].postMessage({ success: true, count: rep.elements.length, frameId: fid, report: rep }); } catch(err) {}
                         }
                     } else if (e.data.type === '__nomad_frame_action') {
                         var targetId = e.data.target;
@@ -342,6 +372,14 @@ enum WebKitPool {
                         if (act === 'click') {
                             try { targetEl.focus(); } catch(err) {}
                             targetEl.click();
+                            if (targetEl.tagName !== 'INPUT') {
+                                var innerInput = targetEl.querySelector ? targetEl.querySelector('input') : null;
+                                if (innerInput) {
+                                    try { innerInput.focus(); } catch(err) {}
+                                    innerInput.click();
+                                }
+                            }
+                            reportToTop(window.__nomad_frame_id);
                         } else if (act === 'type') {
                             try { targetEl.focus(); } catch(err) {}
                             targetEl.value = actionObj.text || '';
@@ -351,11 +389,13 @@ enum WebKitPool {
                                 targetEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
                                 targetEl.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
                             }
+                            reportToTop(window.__nomad_frame_id);
                         } else if (act === 'clear') {
                             try { targetEl.focus(); } catch(err) {}
                             targetEl.value = '';
                             targetEl.dispatchEvent(new Event('input', { bubbles: true }));
                             targetEl.dispatchEvent(new Event('change', { bubbles: true }));
+                            reportToTop(window.__nomad_frame_id);
                         }
                         try {
                             e.source.postMessage({

@@ -150,6 +150,8 @@ final class NomadMCPServer {
             if let v = args["viewportOnly"] as? Bool, v { qs.append("viewportOnly=true") }
             if let it = args["includeText"] as? Bool { qs.append("includeText=\(it)") }
             if let m = args["mode"] as? String { qs.append("mode=\(m.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? m)") }
+            if let r = args["role"] as? String { qs.append("role=\(r.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? r)") }
+            if let txt = args["text"] as? String { qs.append("text=\(txt.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? txt)") }
             if let t = args["tabId"] as? String { qs.append("tabId=\(t.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? t)") }
             let path = qs.isEmpty ? "/snapshot" : "/snapshot?" + qs.joined(separator: "&")
             callNomad(method: "GET", path: path) { res, err in
@@ -506,6 +508,8 @@ final class NomadMCPServer {
                     "offset": ["type": "number", "description": "Starting offset for element pagination in dense pages (default 0)"],
                     "viewportOnly": ["type": "boolean", "description": "When true, only include elements currently inside the visible viewport"],
                     "includeText": ["type": "boolean", "description": "When true (default), include non-interactive text content (li, p, td, th) for outcome verification"],
+                    "role": ["type": "string", "description": "Optional filter: match elements by role or tag (e.g. 'button', 'input', 'heading')"],
+                    "text": ["type": "string", "description": "Optional filter: case-insensitive substring match against element text/value/label"],
                     "mode": ["type": "string", "enum": ["text", "json"], "description": "Perception output format. 'text' returns compact markdown summary; 'json' returns raw element array (default: 'text')"] as [String: Any],
                     "tabId": ["type": "string", "description": "Optional tab UUID to inspect instead of the active tab"]
                 ] as [String: Any],

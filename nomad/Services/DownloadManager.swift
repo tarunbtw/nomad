@@ -43,6 +43,8 @@ final class DownloadItem: NSObject, Identifiable, ObservableObject {
             return ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
         } else if receivedBytes > 0 {
             return ByteCountFormatter.string(fromByteCount: receivedBytes, countStyle: .file)
+        } else if state == .completed || destinationURL != nil {
+            return "0 B"
         }
         return ""
     }
@@ -237,10 +239,21 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
         if let dest = item.destinationURL, FileManager.default.fileExists(atPath: dest.path),
            let attrs = try? FileManager.default.attributesOfItem(atPath: dest.path),
            let onDisk = attrs[.size] as? Int64 {
-            if effectiveBytes <= 0 { effectiveBytes = onDisk }
-            if effectiveTotal <= 0 { effectiveTotal = onDisk }
+            effectiveBytes = onDisk
+            effectiveTotal = onDisk
         }
-        let sizeVal = effectiveTotal > 0 ? effectiveTotal : effectiveBytes
+        let isDone = (item.state == .completed || item.destinationURL != nil)
+        let sizeVal = isDone ? max(0, effectiveTotal >= 0 ? effectiveTotal : effectiveBytes) : (effectiveTotal > 0 ? effectiveTotal : effectiveBytes)
+        let fmtSize: String
+        if sizeVal == 0 && isDone {
+            fmtSize = "0 B"
+        } else if !item.formattedSize.isEmpty && item.formattedSize != "Zero KB" {
+            fmtSize = item.formattedSize
+        } else if isDone {
+            fmtSize = sizeVal == 0 ? "0 B" : ByteCountFormatter.string(fromByteCount: sizeVal, countStyle: .file)
+        } else {
+            fmtSize = ""
+        }
 
         var dict: [String: Any] = [
             "id": item.id.uuidString,
@@ -251,7 +264,7 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
             "totalBytes": effectiveTotal,
             "receivedBytes": effectiveBytes,
             "size": sizeVal,
-            "formattedSize": item.formattedSize,
+            "formattedSize": fmtSize,
             "startedAt": iso.string(from: item.date)
         ]
         if let dest = item.destinationURL {

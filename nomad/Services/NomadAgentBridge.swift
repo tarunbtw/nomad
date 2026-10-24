@@ -17,6 +17,8 @@ struct NomadSnapshot: Codable {
     let viewportWidth: CGFloat
     let viewportHeight: CGFloat
     var totalElements: Int?
+    var filteredTotal: Int?
+    var unfilteredTotal: Int?
     let elements: [NomadElement]
     /// Pre-formatted dense semantic tree for LLM prompt ingestion (~300 tokens).
     let summary: String
@@ -556,14 +558,29 @@ enum NomadDOMScript {
                         try {
                             if (target.ifr.contentWindow) {
                                 var ch = new MessageChannel();
-                                ch.port1.onmessage = function() {
-                                    pending--;
-                                    checkDone();
-                                };
-                                target.ifr.contentWindow.postMessage({
-                                    type: '__nomad_frame_request_scan',
-                                    frameId: target.frameId
-                                }, '*', [ch.port2]);
+                                (function(tgt) {
+                                    ch.port1.onmessage = function(ev) {
+                                        if (ev && ev.data && ev.data.report) {
+                                            var r = ev.data.report;
+                                            var fid = ev.data.frameId || tgt.frameId;
+                                            if (!window.__nomad_frames) window.__nomad_frames = {};
+                                            window.__nomad_frames[fid] = {
+                                                frameId: fid,
+                                                url: r.url || '',
+                                                title: r.title || '',
+                                                elements: r.elements || [],
+                                                source: tgt.ifr.contentWindow,
+                                                updatedAt: Date.now()
+                                            };
+                                        }
+                                        pending--;
+                                        checkDone();
+                                    };
+                                    tgt.ifr.contentWindow.postMessage({
+                                        type: '__nomad_frame_request_scan',
+                                        frameId: tgt.frameId
+                                    }, '*', [ch.port2]);
+                                })(target);
                             } else {
                                 pending--;
                                 checkDone();
@@ -689,18 +706,21 @@ enum NomadDOMScript {
                         }
                     }
 
-                    // 3. Check elementsBounds cache from getSemanticTree
-                    var cache = this.elementsBounds || window.__nomad_elements_bounds;
-                    if (cache && cache[element]) {
-                        var cb = cache[element];
-                        if (cb && (cb.width > 0 || cb.height > 0)) {
-                            return cb;
-                        }
-                    }
-
+                    // 3. Resolve live top-level DOM node first (accurate geometry & isTextEditable)
                     var resolvedNode = (this.elements && this.elements[element] && this.isNodeConnected(this.elements[element]) ? this.elements[element] : null) || this.findInTree(document, element);
-                    if (resolvedNode) element = resolvedNode;
-                    else return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, isEditable: false, tagName: '' };
+                    if (resolvedNode) {
+                        element = resolvedNode;
+                    } else {
+                        // 4. Fallback to elementsBounds cache from getSemanticTree (e.g. cross-origin subframes)
+                        var cache = this.elementsBounds || window.__nomad_elements_bounds;
+                        if (cache && cache[element]) {
+                            var cb = cache[element];
+                            if (cb && (cb.width > 0 || cb.height > 0)) {
+                                return cb;
+                            }
+                        }
+                        return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, isEditable: false, tagName: '' };
+                    }
                 }
                 try {
                     if (element.scrollIntoViewIfNeeded) element.scrollIntoViewIfNeeded();
@@ -777,6 +797,36 @@ enum NomadDOMScript {
             focusElement: function(element) {
                 if (!element) return { success: false, code: 'MISSING_TARGET', message: 'No target element to focus' };
                 if (typeof element === 'string') {
+                    var frameTarget = parseFrameTarget(element);
+                    if (frameTarget) {
+                        var fId = frameTarget.frameId;
+                        var eId = frameTarget.elementId;
+                        var ifr = document.querySelector('iframe[data-nomad-frame="' + fId + '"]');
+                        if (!ifr && fId.indexOf('f') === 0) {
+                            var fIdx = parseInt(fId.substring(1), 10) - 1;
+                            var allIfrs = document.querySelectorAll('iframe');
+                            if (fIdx >= 0 && fIdx < allIfrs.length) ifr = allIfrs[fIdx];
+                        }
+                        if (ifr) {
+                            try {
+                                if (ifr.scrollIntoViewIfNeeded) ifr.scrollIntoViewIfNeeded();
+                                else ifr.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                            } catch(e) {}
+                            try { if (ifr.contentWindow) ifr.contentWindow.focus(); } catch(e) {}
+                            try {
+                                if (ifr.contentDocument && eId) {
+                                    var fEl = (ifr.contentWindow.__nomad && ifr.contentWindow.__nomad.elements && ifr.contentWindow.__nomad.elements[eId]) ||
+                                              ifr.contentDocument.querySelector('[data-nomad-id="' + eId + '"]') ||
+                                              ifr.contentDocument.querySelector(eId);
+                                    if (fEl) {
+                                        try { fEl.focus({ preventScroll: true }); } catch(e) {}
+                                        return { success: true, activeTag: (fEl.tagName || '').toLowerCase(), code: 'SUCCESS', message: 'Element focused in frame' };
+                                    }
+                                }
+                            } catch(e) {}
+                            return { success: true, activeTag: 'iframe', code: 'SUCCESS', message: 'Frame focused' };
+                        }
+                    }
                     var resolvedNode = (this.elements && this.elements[element] && this.isNodeConnected(this.elements[element]) ? this.elements[element] : null) || this.findInTree(document, element);
                     if (resolvedNode) element = resolvedNode;
                     else return { success: false, code: 'ELEMENT_NOT_FOUND', message: 'Target element not found to focus' };
@@ -826,6 +876,8 @@ enum NomadDOMScript {
                 var offset = options.offset !== undefined ? Number(options.offset) : 0;
                 var viewportOnly = Boolean(options.viewportOnly);
                 var includeText = options.includeText !== undefined ? Boolean(options.includeText) : true;
+                var roleFilter = options.role ? String(options.role).toLowerCase().trim() : null;
+                var textFilter = options.text ? String(options.text).toLowerCase().trim() : null;
 
                 if (!this.elements) this.elements = {};
                 if (!this.elementSignatures) this.elementSignatures = {};
@@ -1170,11 +1222,11 @@ enum NomadDOMScript {
                                 rank: null,
                                 isObscured: false,
                                 inViewport: inVp,
-                                disabled: false,
-                                checked: false,
-                                selected: false,
+                                disabled: Boolean(fel.disabled),
+                                checked: Boolean(fel.checked),
+                                selected: Boolean(fel.selected),
                                 focused: false,
-                                readOnly: false,
+                                readOnly: Boolean(fel.readOnly),
                                 isInShadowRoot: false,
                                 src: null,
                                 alt: null,
@@ -1194,6 +1246,13 @@ enum NomadDOMScript {
                 for (var ri = 0; ri < results.length; ri++) {
                     var rItem = results[ri];
                     if (rItem && rItem.id && rItem.bounds) {
+                        var rTag = (rItem.tag || '').toLowerCase();
+                        var rType = (rItem.type || 'text').toLowerCase();
+                        var nonText = ['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file', 'range', 'color', 'hidden'];
+                        var rEditable = (rTag === 'textarea' || (rTag === 'input' && nonText.indexOf(rType) === -1)) && !rItem.readOnly && !rItem.disabled;
+                        if (this.elements && this.elements[rItem.id]) {
+                            rEditable = isTextEditable(this.elements[rItem.id]);
+                        }
                         this.elementsBounds[rItem.id] = {
                             left: rItem.bounds.x,
                             top: rItem.bounds.y,
@@ -1201,17 +1260,32 @@ enum NomadDOMScript {
                             bottom: rItem.bounds.y + rItem.bounds.height,
                             width: rItem.bounds.width,
                             height: rItem.bounds.height,
-                            isEditable: false,
-                            tagName: rItem.tag || ''
+                            isEditable: rEditable,
+                            tagName: rTag
                         };
                     }
                 }
                 window.__nomad_elements_bounds = this.elementsBounds;
 
-                // Filter elements for summary if viewportOnly is specified
+                // Filter elements for summary if viewportOnly, role, or text is specified
                 var summaryCandidates = results;
                 if (viewportOnly) {
-                    summaryCandidates = results.filter(function(item) { return item.inViewport; });
+                    summaryCandidates = summaryCandidates.filter(function(item) { return item.inViewport; });
+                }
+                if (roleFilter) {
+                    summaryCandidates = summaryCandidates.filter(function(item) {
+                        var r = (item.role || '').toLowerCase();
+                        var tg = (item.tag || '').toLowerCase();
+                        var tp = (item.type || '').toLowerCase();
+                        return r === roleFilter || tg === roleFilter || tp === roleFilter;
+                    });
+                }
+                if (textFilter) {
+                    summaryCandidates = summaryCandidates.filter(function(item) {
+                        var t = (item.text || '').toLowerCase();
+                        var v = (item.value || '').toLowerCase();
+                        return t.indexOf(textFilter) !== -1 || v.indexOf(textFilter) !== -1;
+                    });
                 }
 
                 var totalCount = summaryCandidates.length;
@@ -1282,7 +1356,9 @@ enum NomadDOMScript {
                     url: displayUrl,
                     viewportWidth: vpW,
                     viewportHeight: vpH,
-                    totalElements: results.length,
+                    totalElements: totalCount,
+                    filteredTotal: totalCount,
+                    unfilteredTotal: results.length,
                     elements: pagedItems,
                     summary: fullSummary,
                     tokenEstimate: tokenEst
@@ -2050,28 +2126,12 @@ enum NomadDOMScript {
                     badge.className = '__nb';
                     badge.textContent = item.id;
                     var bTop = (b.y >= 14) ? (b.y - 12) : Math.max(0, b.y + 2);
-                    badge.style.left = Math.max(0, Math.min(vpW - 50, b.x)) + 'px';
+                    badge.style.left = Math.max(0, Math.min(vpW - 60, b.x)) + 'px';
                     badge.style.top = Math.max(0, Math.min(vpH - 16, bTop)) + 'px';
                     container.appendChild(badge);
                     renderedBadges[item.id] = true;
                 }
 
-                // 2. Fallback for any live top-level element registered in this.elements not covered in lastResults
-                for (var id in this.elements) {
-                    if (renderedBadges[id]) continue;
-                    var el = this.elements[id];
-                    if (!el) continue;
-                    var rect = this.getElementViewportRect(el);
-                    if (rect.width <= 0 || rect.height <= 0) continue;
-                    if (rect.bottom < -20 || rect.top > vpH + 20 || rect.right < -20 || rect.left > vpW + 20) continue;
-
-                    var badgeFallback = document.createElement('span');
-                    badgeFallback.className = '__nb';
-                    badgeFallback.textContent = id;
-                    badgeFallback.style.left = Math.max(0, rect.left) + 'px';
-                    badgeFallback.style.top = Math.max(0, rect.top - 12) + 'px';
-                    container.appendChild(badgeFallback);
-                }
                 if (document.body) {
                     document.body.appendChild(container);
                     void document.body.offsetHeight;
@@ -2216,7 +2276,7 @@ extension Tab {
 
     /// Extracts a dense, token-efficient semantic tree and element index from the active page.
     @MainActor
-    func getSemanticTree(limit: Int = 100, offset: Int = 0, viewportOnly: Bool = false, includeText: Bool = true) async throws -> NomadSnapshot {
+    func getSemanticTree(limit: Int = 100, offset: Int = 0, viewportOnly: Bool = false, includeText: Bool = true, role: String? = nil, text: String? = nil) async throws -> NomadSnapshot {
         await waitForNavigationSettled(timeout: 0.6)
         await ensureNomadScriptInjected()
 
@@ -2235,16 +2295,16 @@ extension Tab {
 
         // Actively synchronize sub-frames before taking semantic snapshot
         let syncScript = """
-        (async function() {
-            if (window.__nomad && window.__nomad.syncSubframes) {
-                return await window.__nomad.syncSubframes(180);
-            }
-            return { count: 0 };
-        })()
+        if (window.__nomad && window.__nomad.syncSubframes) {
+            return await window.__nomad.syncSubframes(250);
+        }
+        return { count: 0 };
         """
         _ = try? await webView.callAsyncJavaScript(syncScript, arguments: [:], in: nil, in: .page)
 
-        let opts: [String: Any] = ["limit": limit, "offset": offset, "viewportOnly": viewportOnly, "includeText": includeText]
+        var opts: [String: Any] = ["limit": limit, "offset": offset, "viewportOnly": viewportOnly, "includeText": includeText]
+        if let r = role, !r.isEmpty { opts["role"] = r }
+        if let txt = text, !txt.isEmpty { opts["text"] = txt }
         let optsData = (try? JSONSerialization.data(withJSONObject: opts)) ?? Data()
         let optsJSON = String(data: optsData, encoding: .utf8) ?? "{}"
         let jsonString = try await webView.evaluateJavaScript("JSON.stringify(window.__nomad.getSemanticTree(\(optsJSON)))") as? String ?? "{}"
@@ -2255,7 +2315,7 @@ extension Tab {
 
         // Self-healing retry: if snapshot returned 0 elements immediately following a navigation,
         // retry once after 60ms to catch DOM construction if HTML parsing just completed.
-        if snapshot.elements.isEmpty && (self.url?.absoluteString != "about:blank") {
+        if snapshot.elements.isEmpty && (self.url?.absoluteString != "about:blank") && role == nil && text == nil {
             try? await Task.sleep(nanoseconds: 60_000_000)
             await ensureNomadScriptInjected()
             if let retryJSON = try? await webView.evaluateJavaScript("JSON.stringify(window.__nomad.getSemanticTree(\(optsJSON)))") as? String,
@@ -2849,12 +2909,10 @@ extension Tab {
 
         if labeled || (elementId != nil && elementId?.contains("f") == true) {
             let syncScript = """
-            (async function() {
-                if (window.__nomad && window.__nomad.syncSubframes) {
-                    return await window.__nomad.syncSubframes(180);
-                }
-                return { count: 0 };
-            })()
+            if (window.__nomad && window.__nomad.syncSubframes) {
+                return await window.__nomad.syncSubframes(250);
+            }
+            return { count: 0 };
             """
             _ = try? await webView.callAsyncJavaScript(syncScript, arguments: [:], in: nil, in: .page)
         }

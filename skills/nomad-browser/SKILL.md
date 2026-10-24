@@ -72,7 +72,7 @@ nomad_snapshot({ "mode": "json" })
 ```
 
 > [!NOTE]
-> **URL Display in Header:** Snapshot headers echo the current page URL for context grounding. `data:` URLs are collapsed to `data:<mime>;length=N` and long URLs are truncated to prevent context pollution.
+> **URL Display & Filter Totals in Header:** Snapshot headers echo the current page URL for context grounding. `totalElements` (and `filteredTotal`) reflects the count of elements matching any active filters (`role`, `text`, `viewportOnly`), while `unfilteredTotal` returns the raw element count on the page.
 
 ### 3. Precision Action Dispatch
 Interact with elements directly by reference:
@@ -185,8 +185,7 @@ For environments driving Nomad directly without MCP (e.g. `curl`, Python, Node.j
 | `POST` | `/navigate` | Body: `{ "url"?: string, "action"?: "url"|"back"|"forward"|"reload", "allowLocalFiles"?: bool }` (for `file://` URLs, pass `allowLocalFiles: true`; concurrent navigations automatically cancel superseded loads) |
 | `POST` | `/navigate/back` | Navigate back in browser history |
 | `POST` | `/navigate/forward`| Navigate forward in browser history |
-| `POST` | `/navigate/reload` | Reload active page |
-| `GET` | `/snapshot` | Query: `limit`, `offset`, `viewportOnly=true`, `includeText=true`, `mode=text`, `tabId` |
+| `GET` / `POST` | `/snapshot` \| `/tree` | Query / Body: `limit`, `offset`, `viewportOnly=true`, `includeText=true`, `role="button"`, `text="Submit"`, `mode="text"|"json"`, `tabId` (invalid mode rejects with 400 `INVALID_MODE`) |
 | `POST` | `/action` | Body: `{ "type": "click"|"hover"|"type"|"clear"|"press"|"selectOption"|"scroll"|"drag"|"highlight"|"upload"|"native_click"|"native_type"`, `"elementId"?: string`, `"selector"?: string`, `"native"?: bool` (sets `isTrusted: true`), `"paths"?: string[]`, ... } |
 | `POST` | `/upload` | Body: `{ "elementId": string, "paths": string[], "tabId"?: string }` (programmatic file upload without modal GUI sheets) |
 | `GET` | `/downloads` | Query: `limit=20`, returns list of recent file downloads (`filename`, `path`, `size`, `state`, `sha256`) |
