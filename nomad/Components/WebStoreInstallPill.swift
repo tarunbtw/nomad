@@ -81,12 +81,6 @@ struct WebStoreInstallPill: View {
         Task {
             do {
                 try await manager.installFromWebStore(idOrURL: id)
-                // Automatically pin the newly installed extension to the toolbar
-                if let idx = manager.installed.firstIndex(where: { $0.id == id }) {
-                    if !manager.installed[idx].pinned {
-                        manager.togglePinned(id: id)
-                    }
-                }
             } catch {
                 await MainActor.run {
                     installError = error.localizedDescription

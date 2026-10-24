@@ -27,8 +27,6 @@ final class DragNSView: NSView {
         guard let window = window else { return }
         Lights.keep(window)
         
-        window.isMovableByWindowBackground = false
-        
         if !Self.didApplyInitialSize {
             Self.didApplyInitialSize = true
             window.setContentSize(NSSize(width: 1180, height: 780))

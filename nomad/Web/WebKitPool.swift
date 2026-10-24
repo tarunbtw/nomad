@@ -378,7 +378,6 @@ enum WebKitPool {
         })();
         """
         ucc.addUserScript(WKUserScript(source: framePiercerScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
-        ucc.addUserScript(WKUserScript(source: framePiercerScript, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
 
         return config
     }

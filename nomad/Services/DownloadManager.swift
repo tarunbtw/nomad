@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import SwiftUI
 import WebKit
 import Combine
 import CryptoKit
@@ -44,6 +45,28 @@ final class DownloadItem: NSObject, Identifiable, ObservableObject {
             return ByteCountFormatter.string(fromByteCount: receivedBytes, countStyle: .file)
         }
         return ""
+    }
+
+    var iconName: String {
+        let ext = (suggestedFilename as NSString).pathExtension.lowercased()
+        switch ext {
+        case "dmg", "pkg": return "shippingbox.fill"
+        case "zip", "tar", "gz", "rar": return "doc.zipper"
+        case "pdf": return "doc.richtext"
+        case "png", "jpg", "jpeg", "webp", "gif": return "photo"
+        case "mp4", "mov", "webm": return "film"
+        case "mp3", "wav", "m4a": return "music.note"
+        default: return "doc.fill"
+        }
+    }
+
+    var statusColor: Color {
+        switch state {
+        case .downloading: return .blue
+        case .completed: return .green
+        case .failed: return .red
+        case .cancelled: return .secondary
+        }
     }
 
     init(originalURL: URL, suggestedFilename: String, manager: DownloadManager) {

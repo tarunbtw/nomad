@@ -8,6 +8,7 @@
 import SwiftUI
 import WebKit
 import Combine
+import UniformTypeIdentifiers
 
 /// Lightweight console message entry captured from the page.
 struct ConsoleEntry: Identifiable, Sendable {
@@ -345,27 +346,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
                 self.currentNavigation = webView.loadFileURL(resolved, allowingReadAccessTo: readDir)
             } else {
                 if let data = try? Data(contentsOf: resolved) {
-                    let mimeType: String
-                    switch ext {
-                    case "txt", "log", "md", "markdown", "swift", "js", "ts", "py", "sh", "rb", "c", "cpp", "h", "m", "":
-                        mimeType = "text/plain"
-                    case "json":
-                        mimeType = "application/json"
-                    case "xml":
-                        mimeType = "application/xml"
-                    case "png":
-                        mimeType = "image/png"
-                    case "jpg", "jpeg":
-                        mimeType = "image/jpeg"
-                    case "gif":
-                        mimeType = "image/gif"
-                    case "webp":
-                        mimeType = "image/webp"
-                    case "pdf":
-                        mimeType = "application/pdf"
-                    default:
-                        mimeType = "text/plain"
-                    }
+                    let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType ?? "text/plain"
                     self.currentNavigation = webView.load(data, mimeType: mimeType, characterEncodingName: "utf-8", baseURL: resolved)
                 } else {
                     self.currentNavigation = webView.loadFileURL(resolved, allowingReadAccessTo: readDir)
@@ -922,15 +903,20 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
         self.lastNavigationStartTime = Date()
     }
 
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+    private func isSupersededOrCancelled(_ error: Error, navigation: WKNavigation!) -> Bool {
         let nsErr = error as NSError
-        let isCancelled = (nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled)
-        if isCancelled {
-            print("Tab Navigation was cancelled (superseded): \(error.localizedDescription)")
-            return
+        if nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled {
+            return true
         }
         if let curNav = self.currentNavigation, navigation != curNav {
-            print("Tab Navigation failure belongs to superseded navigation, ignoring: \(error.localizedDescription)")
+            return true
+        }
+        return false
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        if isSupersededOrCancelled(error, navigation: navigation) {
+            print("Tab Navigation failure ignored (superseded or cancelled): \(error.localizedDescription)")
             return
         }
 
@@ -942,45 +928,16 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        let nsErr = error as NSError
-        let isCancelled = (nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled)
-
         // Ignore cancellations from superseded in-flight navigations so they do not wipe out allowNextFileNavigation or trigger false fallbacks
-        if isCancelled {
-            print("Tab Provisional navigation was cancelled (superseded): \(error.localizedDescription)")
-            return
-        }
-        if let curNav = self.currentNavigation, navigation != curNav {
-            print("Tab Provisional navigation failure belongs to superseded navigation, ignoring: \(error.localizedDescription)")
+        if isSupersededOrCancelled(error, navigation: navigation) {
+            print("Tab Provisional navigation failure ignored (superseded or cancelled): \(error.localizedDescription)")
             return
         }
 
         // Fallback for file:// URLs that WebKit actually rejects via loadFileURL (e.g. extensionless or unsupported format)
         if let currentURL = self.url, currentURL.isFileURL, self.allowNextFileNavigation, let data = try? Data(contentsOf: currentURL) {
             let ext = currentURL.pathExtension.lowercased()
-            let mimeType: String
-            switch ext {
-            case "html", "htm", "xhtml":
-                mimeType = "text/html"
-            case "svg":
-                mimeType = "image/svg+xml"
-            case "json":
-                mimeType = "application/json"
-            case "xml":
-                mimeType = "application/xml"
-            case "png":
-                mimeType = "image/png"
-            case "jpg", "jpeg":
-                mimeType = "image/jpeg"
-            case "gif":
-                mimeType = "image/gif"
-            case "webp":
-                mimeType = "image/webp"
-            case "pdf":
-                mimeType = "application/pdf"
-            default:
-                mimeType = "text/plain"
-            }
+            let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType ?? "text/plain"
             print("Tab Provisional navigation failed on file URL with \(error.localizedDescription), falling back to data load (\(mimeType))")
             self.currentNavigation = self.webView.load(data, mimeType: mimeType, characterEncodingName: "utf-8", baseURL: currentURL)
             return
@@ -1071,6 +1028,30 @@ final class BrowserWebView: WKWebView {
     private var swipeDirection: Tab.SwipeDirection? = nil
     private let triggerThreshold: CGFloat = 65.0
 
+    @discardableResult
+    private func tryBeginSwipe(dx: CGFloat, dy: CGFloat, ratio: CGFloat, minDx: CGFloat, updateUI: Bool = false) -> Bool {
+        guard abs(dx) > abs(dy) * ratio && abs(dx) > minDx, let tab = tab else { return false }
+        if dx > 0 && tab.webView.canGoBack {
+            swipeDirection = .back
+        } else if dx < 0 && tab.webView.canGoForward {
+            swipeDirection = .forward
+        } else {
+            return false
+        }
+        isTrackingSwipe = true
+        swipeAccumulatedX = dx
+        if updateUI {
+            let distance = abs(swipeAccumulatedX)
+            tab.updateSwipeGesture(
+                direction: swipeDirection!,
+                progress: min(distance / triggerThreshold, 1.0),
+                distance: distance,
+                isTriggered: distance >= triggerThreshold
+            )
+        }
+        return true
+    }
+
     override func scrollWheel(with event: NSEvent) {
         guard let tab = tab, event.hasPreciseScrollingDeltas else {
             super.scrollWheel(with: event)
@@ -1097,21 +1078,7 @@ final class BrowserWebView: WKWebView {
             isTrackingSwipe = false
             swipeDirection = nil
 
-            let dx = event.scrollingDeltaX
-            let dy = event.scrollingDeltaY
-
-            // Only capture if horizontal movement clearly dominates over vertical
-            if abs(dx) > abs(dy) * 1.5 && abs(dx) > 2.0 {
-                if dx > 0 && tab.webView.canGoBack {
-                    isTrackingSwipe = true
-                    swipeDirection = .back
-                    swipeAccumulatedX = dx
-                } else if dx < 0 && tab.webView.canGoForward {
-                    isTrackingSwipe = true
-                    swipeDirection = .forward
-                    swipeAccumulatedX = dx
-                }
-            }
+            tryBeginSwipe(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY, ratio: 1.5, minDx: 2.0)
         } else if phase == .changed {
             if isTrackingSwipe, let dir = swipeDirection {
                 swipeAccumulatedX += event.scrollingDeltaX
@@ -1137,36 +1104,10 @@ final class BrowserWebView: WKWebView {
                     isTriggered: isTriggered
                 )
                 return
-            } else if phase == .changed && !isTrackingSwipe && swipeAccumulatedX == 0 {
+            } else if !isTrackingSwipe && swipeAccumulatedX == 0 {
                 // If gesture started with subtle initial delta but is clearly a horizontal swipe
-                let dx = event.scrollingDeltaX
-                let dy = event.scrollingDeltaY
-                if abs(dx) > abs(dy) * 2.0 && abs(dx) > 5.0 {
-                    if dx > 0 && tab.webView.canGoBack {
-                        isTrackingSwipe = true
-                        swipeDirection = .back
-                        swipeAccumulatedX = dx
-                        let distance = abs(swipeAccumulatedX)
-                        tab.updateSwipeGesture(
-                            direction: .back,
-                            progress: min(distance / triggerThreshold, 1.0),
-                            distance: distance,
-                            isTriggered: distance >= triggerThreshold
-                        )
-                        return
-                    } else if dx < 0 && tab.webView.canGoForward {
-                        isTrackingSwipe = true
-                        swipeDirection = .forward
-                        swipeAccumulatedX = dx
-                        let distance = abs(swipeAccumulatedX)
-                        tab.updateSwipeGesture(
-                            direction: .forward,
-                            progress: min(distance / triggerThreshold, 1.0),
-                            distance: distance,
-                            isTriggered: distance >= triggerThreshold
-                        )
-                        return
-                    }
+                if tryBeginSwipe(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY, ratio: 2.0, minDx: 5.0, updateUI: true) {
+                    return
                 }
             }
         } else if phase == .ended {

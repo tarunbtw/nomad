@@ -27,7 +27,6 @@ final class Lights: NSObject {
 
     private init(_ window: NSWindow) {
         self.window = window
-        window.isMovableByWindowBackground = false
         let row = [NSWindow.ButtonType.closeButton, .miniaturizeButton].compactMap { window.standardWindowButton($0) }
         let measured = row.count == 2 ? row[1].frame.minX - row[0].frame.minX : 0
         spacing = (16...32).contains(measured) ? measured : 20

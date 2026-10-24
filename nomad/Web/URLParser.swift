@@ -30,11 +30,9 @@ enum URLParser {
 
         // Direct extension ID check: if input matches an installed extension ID, navigate to its default page
         if let ext = ExtensionManager.shared.installed.first(where: { $0.id == trimmed }),
-           let context = ExtensionManager.shared.contexts[ext.id] {
-            let page = ExtensionManager.defaultPage(for: context) ?? "popup.html"
-            if let url = URL(string: page, relativeTo: context.baseURL)?.absoluteURL {
-                return url
-            }
+           let context = ExtensionManager.shared.contexts[ext.id],
+           let url = ExtensionManager.defaultPageURL(for: context) {
+            return url
         }
 
         // If it starts with a recognized scheme (including nomad://), use it directly

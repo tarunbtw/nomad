@@ -50,7 +50,7 @@ final class BrowserStore: ObservableObject {
 
         // Prevent opening duplicate settings tabs: switch to existing settings tab if present
         if let targetURL = url, targetURL.scheme == "nomad", targetURL.host == "settings" {
-            if let existingSettings = tabs.first(where: { $0.isInternalPage || $0.url?.scheme == "nomad" || $0.url?.host == "settings" }) {
+            if let existingSettings = tabs.first(where: { $0.isInternalPage }) {
                 if select {
                     selectTab(id: existingSettings.id)
                 }
@@ -188,7 +188,7 @@ final class BrowserStore: ObservableObject {
             SettingsStore.shared.activeSection = section
         }
         let settingsURL = URL(string: "nomad://settings")!
-        if let existing = tabs.first(where: { $0.isInternalPage || $0.url?.scheme == "nomad" || $0.url?.host == "settings" }) {
+        if let existing = tabs.first(where: { $0.isInternalPage }) {
             selectTab(id: existing.id)
         } else if let current = activeTab, current.isBlank {
             current.load(url: settingsURL)

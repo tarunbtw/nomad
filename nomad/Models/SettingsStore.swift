@@ -26,29 +26,17 @@ final class SettingsStore: ObservableObject {
     /// Automatically scans standard macOS library paths for existing browsers on-device.
     var detectedBrowserSources: [LocalBrowserSource] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        var sources: [LocalBrowserSource] = []
-
-        let chromePath = home.appendingPathComponent("Library/Application Support/Google/Chrome/Default/Bookmarks")
-        if FileManager.default.fileExists(atPath: chromePath.path) {
-            sources.append(LocalBrowserSource(id: "chrome", name: "Google Chrome", bookmarksURL: chromePath))
+        let definitions: [(id: String, name: String, path: String)] = [
+            ("chrome", "Google Chrome", "Library/Application Support/Google/Chrome/Default/Bookmarks"),
+            ("arc", "Arc", "Library/Application Support/Arc/User Data/Default/Bookmarks"),
+            ("brave", "Brave", "Library/Application Support/BraveSoftware/Brave-Browser/Default/Bookmarks"),
+            ("edge", "Microsoft Edge", "Library/Application Support/Microsoft Edge/Default/Bookmarks")
+        ]
+        return definitions.compactMap { item in
+            let url = home.appendingPathComponent(item.path)
+            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return LocalBrowserSource(id: item.id, name: item.name, bookmarksURL: url)
         }
-
-        let arcPath = home.appendingPathComponent("Library/Application Support/Arc/User Data/Default/Bookmarks")
-        if FileManager.default.fileExists(atPath: arcPath.path) {
-            sources.append(LocalBrowserSource(id: "arc", name: "Arc", bookmarksURL: arcPath))
-        }
-
-        let bravePath = home.appendingPathComponent("Library/Application Support/BraveSoftware/Brave-Browser/Default/Bookmarks")
-        if FileManager.default.fileExists(atPath: bravePath.path) {
-            sources.append(LocalBrowserSource(id: "brave", name: "Brave", bookmarksURL: bravePath))
-        }
-
-        let edgePath = home.appendingPathComponent("Library/Application Support/Microsoft Edge/Default/Bookmarks")
-        if FileManager.default.fileExists(atPath: edgePath.path) {
-            sources.append(LocalBrowserSource(id: "edge", name: "Microsoft Edge", bookmarksURL: edgePath))
-        }
-
-        return sources
     }
 
     /// Native macOS prompt to bring bookmarks over from installed browsers or files.
@@ -306,11 +294,10 @@ final class SettingsStore: ObservableObject {
                 let url = String(content[urlRange]).trimmingCharacters(in: .whitespacesAndNewlines)
                 var title = String(content[titleRange]).trimmingCharacters(in: .whitespacesAndNewlines)
                 title = title.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-                title = title.replacingOccurrences(of: "&amp;", with: "&")
-                title = title.replacingOccurrences(of: "&quot;", with: "\"")
-                title = title.replacingOccurrences(of: "&#39;", with: "'")
-                title = title.replacingOccurrences(of: "&lt;", with: "<")
-                title = title.replacingOccurrences(of: "&gt;", with: ">")
+                let entities = [("&quot;", "\""), ("&#39;", "'"), ("&lt;", "<"), ("&gt;", ">"), ("&amp;", "&")]
+                for (entity, char) in entities {
+                    title = title.replacingOccurrences(of: entity, with: char)
+                }
 
                 if !url.isEmpty, !url.lowercased().hasPrefix("javascript:") {
                     results.append((title: title.isEmpty ? url : title, url: url))
@@ -396,14 +383,6 @@ extension Color {
         let g = Double((intVal >> 8) & 0xFF) / 255.0
         let b = Double(intVal & 0xFF) / 255.0
         self = Color(.sRGB, red: r, green: g, blue: b, opacity: 1.0)
-    }
-
-    func toHex() -> String? {
-        guard let components = NSColor(self).usingColorSpace(.sRGB) else { return nil }
-        let r = Int(round(components.redComponent * 255.0))
-        let g = Int(round(components.greenComponent * 255.0))
-        let b = Int(round(components.blueComponent * 255.0))
-        return String(format: "%02X%02X%02X", r, g, b)
     }
 }
 

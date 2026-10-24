@@ -277,9 +277,9 @@ struct SettingsView: View {
 
     private func downloadSettingsRow(item: DownloadItem) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: downloadFileIcon(for: item.suggestedFilename))
+            Image(systemName: item.iconName)
                 .font(.system(size: 20))
-                .foregroundStyle(downloadIconColor(for: item.state))
+                .foregroundStyle(item.statusColor)
                 .frame(width: 28, height: 28)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -291,7 +291,7 @@ struct SettingsView: View {
                 HStack(spacing: 6) {
                     Text(item.state.rawValue)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(downloadIconColor(for: item.state))
+                        .foregroundStyle(item.statusColor)
 
                     if !item.formattedSize.isEmpty {
                         Text("•")
@@ -347,28 +347,6 @@ struct SettingsView: View {
             .help("Remove from history")
         }
         .padding(.vertical, 4)
-    }
-
-    private func downloadFileIcon(for filename: String) -> String {
-        let ext = (filename as NSString).pathExtension.lowercased()
-        switch ext {
-        case "dmg", "pkg": return "shippingbox.fill"
-        case "zip", "tar", "gz", "rar": return "doc.zipper"
-        case "pdf": return "doc.richtext"
-        case "png", "jpg", "jpeg", "webp", "gif": return "photo"
-        case "mp4", "mov", "webm": return "film"
-        case "mp3", "wav", "m4a": return "music.note"
-        default: return "doc.fill"
-        }
-    }
-
-    private func downloadIconColor(for state: DownloadItem.DownloadState) -> Color {
-        switch state {
-        case .downloading: return .blue
-        case .completed: return .green
-        case .failed: return .red
-        case .cancelled: return .secondary
-        }
     }
 
     // MARK: - General Section

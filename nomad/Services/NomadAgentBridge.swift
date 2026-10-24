@@ -80,15 +80,12 @@ struct NomadAction: Codable {
     var optionText: String?
     var modifiers: [String]?
     var paths: [String]?
-    var files: [String]?
 
     var resolvedPaths: [String] {
-        if let paths = paths, !paths.isEmpty { return paths }
-        if let files = files, !files.isEmpty { return files }
-        return []
+        paths ?? []
     }
 
-    init(action: String = "click", target: String? = nil, text: String? = nil, key: String? = nil, direction: String? = nil, amount: CGFloat? = nil, submit: Bool? = nil, blur: Bool? = nil, change: Bool? = nil, force: Bool? = nil, native: Bool? = nil, x: CGFloat? = nil, y: CGFloat? = nil, toX: CGFloat? = nil, toY: CGFloat? = nil, scrollDeltaY: CGFloat? = nil, scrollDeltaX: CGFloat? = nil, optionValue: String? = nil, optionText: String? = nil, modifiers: [String]? = nil, paths: [String]? = nil, files: [String]? = nil) {
+    init(action: String = "click", target: String? = nil, text: String? = nil, key: String? = nil, direction: String? = nil, amount: CGFloat? = nil, submit: Bool? = nil, blur: Bool? = nil, change: Bool? = nil, force: Bool? = nil, native: Bool? = nil, x: CGFloat? = nil, y: CGFloat? = nil, toX: CGFloat? = nil, toY: CGFloat? = nil, scrollDeltaY: CGFloat? = nil, scrollDeltaX: CGFloat? = nil, optionValue: String? = nil, optionText: String? = nil, modifiers: [String]? = nil, paths: [String]? = nil) {
         self.action = action
         self.target = target
         self.text = text
@@ -110,7 +107,6 @@ struct NomadAction: Codable {
         self.optionText = optionText
         self.modifiers = modifiers
         self.paths = paths
-        self.files = files ?? paths
     }
 
     enum CodingKeys: String, CodingKey {
@@ -158,26 +154,15 @@ struct NomadAction: Codable {
         self.optionText = try c.decodeIfPresent(String.self, forKey: .optionText)
         self.modifiers = try c.decodeIfPresent([String].self, forKey: .modifiers)
 
-        var collectedPaths: [String] = []
-        if let arr = try? c.decodeIfPresent([String].self, forKey: .paths) {
-            collectedPaths.append(contentsOf: arr)
-        } else if let single = try? c.decodeIfPresent(String.self, forKey: .paths) {
-            collectedPaths.append(single)
+        if let pathsArray = try? c.decodeIfPresent([String].self, forKey: .paths) ?? c.decodeIfPresent([String].self, forKey: .files) {
+            var seen = Set<String>()
+            let cleaned = pathsArray.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty && seen.insert($0).inserted }
+            self.paths = cleaned.isEmpty ? nil : cleaned
+        } else if let single = (try? c.decodeIfPresent(String.self, forKey: .paths) ?? c.decodeIfPresent(String.self, forKey: .path) ?? c.decodeIfPresent(String.self, forKey: .files) ?? c.decodeIfPresent(String.self, forKey: .file))?.trimmingCharacters(in: .whitespacesAndNewlines), !single.isEmpty {
+            self.paths = [single]
+        } else {
+            self.paths = nil
         }
-        if let arr = try? c.decodeIfPresent([String].self, forKey: .files) {
-            collectedPaths.append(contentsOf: arr)
-        } else if let single = try? c.decodeIfPresent(String.self, forKey: .files) {
-            collectedPaths.append(single)
-        }
-        if let single = try? c.decodeIfPresent(String.self, forKey: .path) {
-            collectedPaths.append(single)
-        }
-        if let single = try? c.decodeIfPresent(String.self, forKey: .file) {
-            collectedPaths.append(single)
-        }
-        let unique = Array(NSOrderedSet(array: collectedPaths.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })) as? [String] ?? []
-        self.paths = unique.isEmpty ? nil : unique
-        self.files = self.paths
     }
 
     func encode(to encoder: Encoder) throws {
@@ -203,7 +188,6 @@ struct NomadAction: Codable {
         try c.encodeIfPresent(optionText, forKey: .optionText)
         try c.encodeIfPresent(modifiers, forKey: .modifiers)
         try c.encodeIfPresent(paths, forKey: .paths)
-        try c.encodeIfPresent(files, forKey: .files)
     }
 }
 
@@ -252,6 +236,17 @@ enum NomadDOMScript {
     public static let core = """
     (function() {
         if (window.__nomad) return;
+
+        // Parses frame-qualified target ID (e.g. 'f1:e2' or 'e2_f1')
+        function parseFrameTarget(id) {
+            if (!id || typeof id !== 'string' || (id.indexOf(':') === -1 && id.indexOf('_') === -1)) return null;
+            var sep = id.indexOf(':') !== -1 ? ':' : '_';
+            var parts = id.split(sep);
+            return {
+                frameId: parts[0].indexOf('f') === 0 ? parts[0] : parts[1],
+                elementId: parts[0].indexOf('f') === 0 ? parts[1] : parts[0]
+            };
+        }
 
         // Validates whether an element is truly editable for typing or clearing
         function isTextEditable(node) {
@@ -443,11 +438,10 @@ enum NomadDOMScript {
             getElementViewportRect: function(element) {
                 if (!element) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
                 if (typeof element === 'string') {
-                    if (element.indexOf(':') !== -1 || element.indexOf('_') !== -1) {
-                        var sep = element.indexOf(':') !== -1 ? ':' : '_';
-                        var parts = element.split(sep);
-                        var fId = parts[0].indexOf('f') === 0 ? parts[0] : parts[1];
-                        var eId = parts[0].indexOf('f') === 0 ? parts[1] : parts[0];
+                    var frameTarget = parseFrameTarget(element);
+                    if (frameTarget) {
+                        var fId = frameTarget.frameId;
+                        var eId = frameTarget.elementId;
                         var ifr = document.querySelector('iframe[data-nomad-frame="' + fId + '"]');
                         if (ifr) {
                             var ifrRect = ifr.getBoundingClientRect();
@@ -1204,11 +1198,10 @@ enum NomadDOMScript {
                 }
 
                 // Sub-frame action routing for frame-qualified targets (e.g. 'f1:e2' or 'e2:f1')
-                if (targetId && (targetId.indexOf(':') !== -1 || targetId.indexOf('_') !== -1)) {
-                    var sep = targetId.indexOf(':') !== -1 ? ':' : '_';
-                    var parts = targetId.split(sep);
-                    var fId = parts[0].indexOf('f') === 0 ? parts[0] : parts[1];
-                    var eId = parts[0].indexOf('f') === 0 ? parts[1] : parts[0];
+                var frameTarget = parseFrameTarget(targetId);
+                if (frameTarget) {
+                    var fId = frameTarget.frameId;
+                    var eId = frameTarget.elementId;
                     var ifr = document.querySelector('iframe[data-nomad-frame="' + fId + '"]');
                     if (ifr && ifr.contentWindow) {
                         try {
@@ -1874,15 +1867,20 @@ extension Tab {
         }
     }
 
+    /// Waits for in-flight web view navigation to settle up to a given timeout.
+    @MainActor
+    func waitForNavigationSettled(timeout: TimeInterval = 0.5, pollIntervalMs: UInt64 = 30) async {
+        guard webView.isLoading else { return }
+        let deadline = Date().addingTimeInterval(timeout)
+        while webView.isLoading && Date() < deadline {
+            try? await Task.sleep(nanoseconds: pollIntervalMs * 1_000_000)
+        }
+    }
+
     /// Extracts a dense, token-efficient semantic tree and element index from the active page.
     @MainActor
     func getSemanticTree(limit: Int = 100, offset: Int = 0, viewportOnly: Bool = false, includeText: Bool = true) async throws -> NomadSnapshot {
-        if webView.isLoading {
-            let start = Date()
-            while webView.isLoading && Date().timeIntervalSince(start) < 0.6 {
-                try? await Task.sleep(nanoseconds: 30_000_000)
-            }
-        }
+        await waitForNavigationSettled(timeout: 0.6)
         await ensureNomadScriptInjected()
 
         // Ensure DOM readiness: wait briefly if document or document.body is still loading
@@ -1938,14 +1936,9 @@ extension Tab {
     @MainActor
     func performAction(_ action: NomadAction) async throws -> NomadActionResult {
         self.lastActionTime = Date()
+        await waitForNavigationSettled(timeout: 0.4)
         if webView.isLoading {
-            let start = Date()
-            while webView.isLoading && Date().timeIntervalSince(start) < 0.4 {
-                try? await Task.sleep(nanoseconds: 30_000_000)
-            }
-            if webView.isLoading {
-                return NomadActionResult(success: false, message: "Cannot execute action '\(action.action)': active page is currently navigating. Wait for navigation to complete before dispatching actions.", elementId: action.target)
-            }
+            return NomadActionResult(success: false, message: "Cannot execute action '\(action.action)': active page is currently navigating. Wait for navigation to complete before dispatching actions.", elementId: action.target)
         }
 
         // Native AppKit & CoreGraphics hardware input dispatch (isTrusted: true)
@@ -2009,9 +2002,7 @@ extension Tab {
     func waitForStability(quietMs: Int = 250, timeoutMs: Int = 5000) async throws -> [String: Any] {
         let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
         // 1. Wait for webView provisional or active navigation to complete
-        while webView.isLoading && Date() < deadline {
-            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
-        }
+        await waitForNavigationSettled(timeout: max(0.0, deadline.timeIntervalSinceNow), pollIntervalMs: 50)
 
         // 2. Wait for HTML document to finish parsing
         while Date() < deadline {

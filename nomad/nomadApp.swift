@@ -31,11 +31,7 @@ struct nomadApp: App {
                 }
             }
             CommandGroup(replacing: .printItem) {
-                // Replaces standard Page Setup (⇧⌘P) so ⇧⌘P belongs directly to Picture-in-Picture
-                Button("Print...") {
-                    // Handled inside browser view via ⌘P
-                }
-                .keyboardShortcut("p", modifiers: .command)
+                // Replaces standard Print and Page Setup so ⌘P belongs directly to browser view and ⇧⌘P belongs to Picture-in-Picture
             }
             CommandGroup(after: .newItem) {
                 Button("Bring Things Over...") {

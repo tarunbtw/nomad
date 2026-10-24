@@ -106,9 +106,9 @@ private struct DownloadRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: fileIcon(for: item.suggestedFilename))
+            Image(systemName: item.iconName)
                 .font(.system(size: 18))
-                .foregroundStyle(iconColor(for: item.state))
+                .foregroundStyle(item.statusColor)
                 .frame(width: 24, height: 24)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -171,27 +171,5 @@ private struct DownloadRow: View {
         .background(isHovered ? Color.primary.opacity(0.06) : Color.clear)
         .cornerRadius(6)
         .onHover { isHovered = $0 }
-    }
-
-    private func fileIcon(for filename: String) -> String {
-        let ext = (filename as NSString).pathExtension.lowercased()
-        switch ext {
-        case "dmg", "pkg": return "shippingbox.fill"
-        case "zip", "tar", "gz", "rar": return "doc.zipper"
-        case "pdf": return "doc.richtext"
-        case "png", "jpg", "jpeg", "webp", "gif": return "photo"
-        case "mp4", "mov", "webm": return "film"
-        case "mp3", "wav", "m4a": return "music.note"
-        default: return "doc.fill"
-        }
-    }
-
-    private func iconColor(for state: DownloadItem.DownloadState) -> Color {
-        switch state {
-        case .downloading: return .blue
-        case .completed: return .green
-        case .failed: return .red
-        case .cancelled: return .secondary
-        }
     }
 }

@@ -292,9 +292,9 @@ final class NomadMCPServer {
         }
     }
 
-    private static func callNomad(method: String, path: String, body: [String: Any]? = nil, completion: @escaping (Any?, String?) -> Void) {
+    private static func callNomadHTTP(method: String, path: String, body: [String: Any]? = nil, completion: @escaping (Data?, HTTPURLResponse?, Error?) -> Void) {
         guard let url = URL(string: "http://127.0.0.1:\(port)\(path)") else {
-            completion(nil, "Invalid URL")
+            completion(nil, nil, NSError(domain: "NomadMCP", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"]))
             return
         }
 
@@ -312,71 +312,55 @@ final class NomadMCPServer {
         }
 
         var resultData: Data? = nil
+        var resultResponse: HTTPURLResponse? = nil
         var resultError: Error? = nil
 
         let semaphore = DispatchSemaphore(value: 0)
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
             resultData = data
+            resultResponse = response as? HTTPURLResponse
             resultError = error
             semaphore.signal()
         }
         task.resume()
         _ = semaphore.wait(timeout: .now() + 35.0)
 
-        if let error = resultError as NSError? {
-            if error.domain == NSURLErrorDomain && error.code == NSURLErrorCannotConnectToHost {
-                completion(nil, "Could not connect to Nomad browser engine at http://127.0.0.1:\(port) (ECONNREFUSED). Nomad browser is not currently running. Please launch Nomad to enable automation.")
-            } else {
-                completion(nil, "Network error: \(error.localizedDescription)")
+        completion(resultData, resultResponse, resultError)
+    }
+
+    private static func callNomad(method: String, path: String, body: [String: Any]? = nil, completion: @escaping (Any?, String?) -> Void) {
+        callNomadHTTP(method: method, path: path, body: body) { data, _, error in
+            if let error = error as NSError? {
+                if error.domain == NSURLErrorDomain && error.code == NSURLErrorCannotConnectToHost {
+                    completion(nil, "Could not connect to Nomad browser engine at http://127.0.0.1:\(port) (ECONNREFUSED). Nomad browser is not currently running. Please launch Nomad to enable automation.")
+                } else {
+                    completion(nil, "Network error: \(error.localizedDescription)")
+                }
+                return
             }
-            return
-        }
-        guard let data = resultData else {
-            completion(nil, "Empty response from Nomad")
-            return
-        }
-        if let json = try? JSONSerialization.jsonObject(with: data) {
-            completion(json, nil)
-        } else if let text = String(data: data, encoding: .utf8) {
-            completion(text, nil)
-        } else {
-            completion(nil, "Unparseable response")
+            guard let data = data else {
+                completion(nil, "Empty response from Nomad")
+                return
+            }
+            if let json = try? JSONSerialization.jsonObject(with: data) {
+                completion(json, nil)
+            } else if let text = String(data: data, encoding: .utf8) {
+                completion(text, nil)
+            } else {
+                completion(nil, "Unparseable response")
+            }
         }
     }
 
     private static func callNomadRaw(method: String, path: String, completion: @escaping (Data?, String?, String?) -> Void) {
-        guard let url = URL(string: "http://127.0.0.1:\(port)\(path)") else {
-            completion(nil, nil, "Invalid URL")
-            return
+        callNomadHTTP(method: method, path: path) { data, response, error in
+            if let error = error {
+                completion(nil, nil, error.localizedDescription)
+                return
+            }
+            let contentType = response?.value(forHTTPHeaderField: "Content-Type")
+            completion(data, contentType, nil)
         }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.timeoutInterval = 35.0
-
-        if let token = loadToken() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-
-        var resultData: Data? = nil
-        var resultContentType: String? = nil
-        var resultError: Error? = nil
-
-        let semaphore = DispatchSemaphore(value: 0)
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            resultData = data
-            resultContentType = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")
-            resultError = error
-            semaphore.signal()
-        }
-        task.resume()
-        _ = semaphore.wait(timeout: .now() + 35.0)
-
-        if let error = resultError {
-            completion(nil, nil, error.localizedDescription)
-            return
-        }
-        completion(resultData, resultContentType, nil)
     }
 
     private static func respondTool(id: Any?, res: Any?, error: String?) {

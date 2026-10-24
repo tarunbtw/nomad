@@ -328,6 +328,12 @@ final class ExtensionManager: NSObject, ObservableObject {
         return "popup.html"
     }
 
+    /// Resolves the absolute URL for an extension's default page (home.html, onboarding.html, popup.html).
+    static func defaultPageURL(for context: WKWebExtensionContext) -> URL? {
+        guard let page = defaultPage(for: context) else { return nil }
+        return URL(string: page, relativeTo: context.baseURL)?.absoluteURL
+    }
+
     // MARK: - Persistence
 
     private func save() {
@@ -372,9 +378,8 @@ extension ExtensionManager: WKWebExtensionControllerDelegate {
                 url = resolved
             }
         } else if url.scheme == ExtensionManager.scheme && (url.path.isEmpty || url.path == "/") {
-            if let fallback = ExtensionManager.defaultPage(for: extensionContext),
-               let resolved = URL(string: fallback, relativeTo: extensionContext.baseURL)?.absoluteURL {
-                url = resolved
+            if let fallback = ExtensionManager.defaultPageURL(for: extensionContext) {
+                url = fallback
             }
         }
         let newTab = store.newTab(url: url, configuration: extensionContext.webViewConfiguration, select: configuration.shouldBeActive)
@@ -392,9 +397,8 @@ extension ExtensionManager: WKWebExtensionControllerDelegate {
                     url = resolved
                 }
             } else if url.scheme == ExtensionManager.scheme && (url.path.isEmpty || url.path == "/") {
-                if let fallback = ExtensionManager.defaultPage(for: extensionContext),
-                   let resolved = URL(string: fallback, relativeTo: extensionContext.baseURL)?.absoluteURL {
-                    url = resolved
+                if let fallback = ExtensionManager.defaultPageURL(for: extensionContext) {
+                    url = fallback
                 }
             }
             store.newTab(url: url, configuration: extensionContext.webViewConfiguration, select: idx == 0)

@@ -450,10 +450,8 @@ final class NomadAgentServer: ObservableObject {
                 "version": "1.0",
                 "port": self.port,
                 "tabsCount": store.tabs.count,
-                "tabCount": store.tabs.count,
                 "activeTabId": store.activeTabId?.uuidString ?? "",
                 "activeURL": liveURL,
-                "activeUrl": liveURL,
                 "activeTitle": liveTitle,
                 "lastDialog": (store.activeTab?.lastDialog as Any?) ?? NSNull(),
                 "capabilities": capabilities
@@ -470,7 +468,6 @@ final class NomadAgentServer: ObservableObject {
                     "url": urlStr,
                     "isIncognito": tab.isIncognito,
                     "isActive": tab.id == store.activeTabId,
-                    "active": tab.id == store.activeTabId,
                     "isLoading": tab.isLoading
                 ]
             }
