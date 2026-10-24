@@ -582,47 +582,122 @@ enum NomadDOMScript {
                 if (!element) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, isEditable: false, tagName: '' };
                 if (typeof element === 'string') {
                     var frameTarget = parseFrameTarget(element);
+                    if (!frameTarget && /^f[0-9]+$/i.test(element)) {
+                        frameTarget = { frameId: element, elementId: null };
+                    }
                     if (frameTarget) {
                         var fId = frameTarget.frameId;
                         var eId = frameTarget.elementId;
                         var ifr = document.querySelector('iframe[data-nomad-frame="' + fId + '"]');
+                        if (!ifr && fId.indexOf('f') === 0) {
+                            var fIdx = parseInt(fId.substring(1), 10) - 1;
+                            var allIframes = document.querySelectorAll('iframe');
+                            if (fIdx >= 0 && fIdx < allIframes.length) {
+                                ifr = allIframes[fIdx];
+                                try { ifr.setAttribute('data-nomad-frame', fId); } catch(e) {}
+                            }
+                        }
+                        if (!ifr && this.findInTree) {
+                            try {
+                                ifr = this.findInTree(document, 'iframe[data-nomad-frame="' + fId + '"]') || (fId === 'f1' ? this.findInTree(document, 'iframe') : null);
+                            } catch(e) {}
+                        }
                         if (ifr) {
+                            try {
+                                if (ifr.scrollIntoViewIfNeeded) ifr.scrollIntoViewIfNeeded();
+                                else ifr.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                            } catch(e) {}
                             var ifrRect = ifr.getBoundingClientRect();
-                            var fData = window.__nomad_frames && window.__nomad_frames[fId];
-                            if (fData && fData.elements) {
-                                for (var ei = 0; ei < fData.elements.length; ei++) {
-                                    if (fData.elements[ei].id === eId) {
-                                        var eb = fData.elements[ei].bounds;
-                                        var fe = fData.elements[ei];
-                                        var fTag = (fe.tag || '').toLowerCase();
-                                        var fType = (fe.type || 'text').toLowerCase();
-                                        var nonText = ['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file', 'range', 'color', 'hidden'];
-                                        var fEditable = (fTag === 'textarea' || (fTag === 'input' && nonText.indexOf(fType) === -1)) && !fe.readOnly && !fe.disabled;
-                                        return {
-                                            left: Math.round(ifrRect.left + eb.x),
-                                            top: Math.round(ifrRect.top + eb.y),
-                                            right: Math.round(ifrRect.left + eb.x + eb.width),
-                                            bottom: Math.round(ifrRect.top + eb.y + eb.height),
-                                            width: Math.round(eb.width),
-                                            height: Math.round(eb.height),
-                                            isEditable: fEditable,
-                                            tagName: fTag
-                                        };
+                            if (eId) {
+                                // 1. Attempt live resolution in same-origin frame DOM
+                                try {
+                                    var fDoc = ifr.contentDocument || (ifr.contentWindow ? ifr.contentWindow.document : null);
+                                    if (fDoc) {
+                                        var subEl = null;
+                                        if (ifr.contentWindow && ifr.contentWindow.__nomad && ifr.contentWindow.__nomad.elements) {
+                                            subEl = ifr.contentWindow.__nomad.elements[eId];
+                                        }
+                                        if (!subEl) {
+                                            try { subEl = fDoc.querySelector('[data-nomad-id="' + CSS.escape(eId) + '"]'); } catch(e) {}
+                                        }
+                                        if (!subEl) {
+                                            try { subEl = fDoc.querySelector('[data-nomad-id="' + CSS.escape(element) + '"]'); } catch(e) {}
+                                        }
+                                        if (!subEl) {
+                                            try { subEl = fDoc.querySelector(eId); } catch(e) {}
+                                        }
+                                        if (subEl) {
+                                            try {
+                                                if (subEl.scrollIntoViewIfNeeded) subEl.scrollIntoViewIfNeeded();
+                                                else subEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                                            } catch(e) {}
+                                            var subRect = subEl.getBoundingClientRect();
+                                            if (subRect.width > 0 && subRect.height > 0) {
+                                                return {
+                                                    left: Math.round(ifrRect.left + subRect.left),
+                                                    top: Math.round(ifrRect.top + subRect.top),
+                                                    right: Math.round(ifrRect.left + subRect.left + subRect.width),
+                                                    bottom: Math.round(ifrRect.top + subRect.top + subRect.height),
+                                                    width: Math.round(subRect.width),
+                                                    height: Math.round(subRect.height),
+                                                    isEditable: isTextEditable(subEl),
+                                                    tagName: (subEl.tagName || '').toLowerCase()
+                                                };
+                                            }
+                                        }
+                                    }
+                                } catch(e) {}
+
+                                // 2. Cross-origin / postMessage cached frame elements
+                                var fData = window.__nomad_frames && window.__nomad_frames[fId];
+                                if (fData && fData.elements) {
+                                    for (var ei = 0; ei < fData.elements.length; ei++) {
+                                        var fel = fData.elements[ei];
+                                        if (fel.id === eId || fel.id === element || fel.id === (fId + ':' + eId)) {
+                                            var eb = fel.bounds;
+                                            if (eb && (eb.width > 0 || eb.height > 0)) {
+                                                var fTag = (fel.tag || '').toLowerCase();
+                                                var fType = (fel.type || 'text').toLowerCase();
+                                                var nonText = ['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file', 'range', 'color', 'hidden'];
+                                                var fEditable = (fTag === 'textarea' || (fTag === 'input' && nonText.indexOf(fType) === -1)) && !fel.readOnly && !fel.disabled;
+                                                return {
+                                                    left: Math.round(ifrRect.left + eb.x),
+                                                    top: Math.round(ifrRect.top + eb.y),
+                                                    right: Math.round(ifrRect.left + eb.x + eb.width),
+                                                    bottom: Math.round(ifrRect.top + eb.y + eb.height),
+                                                    width: Math.round(eb.width),
+                                                    height: Math.round(eb.height),
+                                                    isEditable: fEditable,
+                                                    tagName: fTag
+                                                };
+                                            }
+                                        }
                                     }
                                 }
+                            } else {
+                                return {
+                                    left: Math.round(ifrRect.left),
+                                    top: Math.round(ifrRect.top),
+                                    right: Math.round(ifrRect.right),
+                                    bottom: Math.round(ifrRect.bottom),
+                                    width: Math.round(ifrRect.width),
+                                    height: Math.round(ifrRect.height),
+                                    isEditable: false,
+                                    tagName: 'iframe'
+                                };
                             }
-                            return {
-                                left: Math.round(ifrRect.left),
-                                top: Math.round(ifrRect.top),
-                                right: Math.round(ifrRect.right),
-                                bottom: Math.round(ifrRect.bottom),
-                                width: Math.round(ifrRect.width),
-                                height: Math.round(ifrRect.height),
-                                isEditable: false,
-                                tagName: 'iframe'
-                            };
                         }
                     }
+
+                    // 3. Check elementsBounds cache from getSemanticTree
+                    var cache = this.elementsBounds || window.__nomad_elements_bounds;
+                    if (cache && cache[element]) {
+                        var cb = cache[element];
+                        if (cb && (cb.width > 0 || cb.height > 0)) {
+                            return cb;
+                        }
+                    }
+
                     var resolvedNode = (this.elements && this.elements[element] && this.isNodeConnected(this.elements[element]) ? this.elements[element] : null) || this.findInTree(document, element);
                     if (resolvedNode) element = resolvedNode;
                     else return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, isEditable: false, tagName: '' };
@@ -754,6 +829,7 @@ enum NomadDOMScript {
 
                 if (!this.elements) this.elements = {};
                 if (!this.elementSignatures) this.elementSignatures = {};
+                this.elementsBounds = {};
                 for (var oldId in this.elements) {
                     if (!this.isNodeConnected(this.elements[oldId])) {
                         delete this.elements[oldId];
@@ -1076,7 +1152,11 @@ enum NomadDOMScript {
                             var qualifiedId = frameId + ':' + fel.id;
                             var absX = Math.round(ifrRect.left + fel.bounds.x);
                             var absY = Math.round(ifrRect.top + fel.bounds.y);
-                            var inVp = (absY + fel.bounds.height >= 0 && absY <= vpH && absX + fel.bounds.width >= 0 && absX <= vpW);
+                            var visibleLeft = Math.max(0, ifrRect.left, absX);
+                            var visibleTop = Math.max(0, ifrRect.top, absY);
+                            var visibleRight = Math.min(vpW, ifrRect.right, absX + fel.bounds.width);
+                            var visibleBottom = Math.min(vpH, ifrRect.bottom, absY + fel.bounds.height);
+                            var inVp = (visibleRight > visibleLeft && visibleBottom > visibleTop);
 
                             results.push({
                                 id: qualifiedId,
@@ -1109,6 +1189,24 @@ enum NomadDOMScript {
                         }
                     }
                 }
+
+                if (!this.elementsBounds) this.elementsBounds = {};
+                for (var ri = 0; ri < results.length; ri++) {
+                    var rItem = results[ri];
+                    if (rItem && rItem.id && rItem.bounds) {
+                        this.elementsBounds[rItem.id] = {
+                            left: rItem.bounds.x,
+                            top: rItem.bounds.y,
+                            right: rItem.bounds.x + rItem.bounds.width,
+                            bottom: rItem.bounds.y + rItem.bounds.height,
+                            width: rItem.bounds.width,
+                            height: rItem.bounds.height,
+                            isEditable: false,
+                            tagName: rItem.tag || ''
+                        };
+                    }
+                }
+                window.__nomad_elements_bounds = this.elementsBounds;
 
                 // Filter elements for summary if viewportOnly is specified
                 var summaryCandidates = results;
@@ -1177,6 +1275,7 @@ enum NomadDOMScript {
 
                 var fullSummary = summaryLines.join('\\n');
                 var tokenEst = Math.round(fullSummary.length / 4);
+                this.lastResults = results;
 
                 return {
                     title: document.title || '',
@@ -1412,6 +1511,14 @@ enum NomadDOMScript {
                     var fId = frameTarget.frameId;
                     var eId = frameTarget.elementId;
                     var ifr = document.querySelector('iframe[data-nomad-frame="' + fId + '"]');
+                    if (!ifr && fId.indexOf('f') === 0) {
+                        var ifrIdx = parseInt(fId.substring(1), 10) - 1;
+                        var allIfrs = document.querySelectorAll('iframe');
+                        if (ifrIdx >= 0 && ifrIdx < allIfrs.length) {
+                            ifr = allIfrs[ifrIdx];
+                            try { ifr.setAttribute('data-nomad-frame', fId); } catch(e) {}
+                        }
+                    }
                     if (ifr && ifr.contentWindow) {
                         try {
                             ifr.contentWindow.postMessage({
@@ -1923,23 +2030,47 @@ enum NomadDOMScript {
                 var container = document.createElement('div');
                 container.id = '__nomad_badges_layer';
                 container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;';
-                container.innerHTML = '<style>.__nb{position:fixed;background:#000;color:#fff;border:1px solid rgba(255,255,255,0.8);font:bold 10px monospace;padding:1px 3px;border-radius:3px;box-shadow:0 1px 3px rgba(0,0,0,0.6);z-index:2147483647;pointer-events:none;}</style>';
+                container.innerHTML = '<style>.__nb{position:fixed;background:#000;color:#fff;border:1px solid rgba(255,255,255,0.85);font:bold 10px monospace;padding:1px 3px;border-radius:3px;box-shadow:0 1px 3px rgba(0,0,0,0.6);z-index:2147483647;pointer-events:none;line-height:1;white-space:nowrap;}</style>';
 
                 var vpW = window.innerWidth || 2000;
                 var vpH = window.innerHeight || 2000;
+                var renderedBadges = {};
+
+                // 1. Overlay badges for all elements in semantic perception tree (including subframe targets)
+                var sourceList = this.lastResults || [];
+                for (var ri = 0; ri < sourceList.length; ri++) {
+                    var item = sourceList[ri];
+                    if (!item || !item.id || !item.bounds) continue;
+                    if (!item.inViewport || item.isObscured) continue;
+                    var b = item.bounds;
+                    if (b.width <= 0 || b.height <= 0) continue;
+                    if (b.y + b.height < 0 || b.y > vpH || b.x + b.width < 0 || b.x > vpW) continue;
+
+                    var badge = document.createElement('span');
+                    badge.className = '__nb';
+                    badge.textContent = item.id;
+                    var bTop = (b.y >= 14) ? (b.y - 12) : Math.max(0, b.y + 2);
+                    badge.style.left = Math.max(0, Math.min(vpW - 50, b.x)) + 'px';
+                    badge.style.top = Math.max(0, Math.min(vpH - 16, bTop)) + 'px';
+                    container.appendChild(badge);
+                    renderedBadges[item.id] = true;
+                }
+
+                // 2. Fallback for any live top-level element registered in this.elements not covered in lastResults
                 for (var id in this.elements) {
+                    if (renderedBadges[id]) continue;
                     var el = this.elements[id];
                     if (!el) continue;
                     var rect = this.getElementViewportRect(el);
                     if (rect.width <= 0 || rect.height <= 0) continue;
                     if (rect.bottom < -20 || rect.top > vpH + 20 || rect.right < -20 || rect.left > vpW + 20) continue;
 
-                    var badge = document.createElement('span');
-                    badge.className = '__nb';
-                    badge.textContent = id;
-                    badge.style.left = Math.max(0, rect.left) + 'px';
-                    badge.style.top = Math.max(0, rect.top - 12) + 'px';
-                    container.appendChild(badge);
+                    var badgeFallback = document.createElement('span');
+                    badgeFallback.className = '__nb';
+                    badgeFallback.textContent = id;
+                    badgeFallback.style.left = Math.max(0, rect.left) + 'px';
+                    badgeFallback.style.top = Math.max(0, rect.top - 12) + 'px';
+                    container.appendChild(badgeFallback);
                 }
                 if (document.body) {
                     document.body.appendChild(container);
@@ -2716,6 +2847,18 @@ extension Tab {
     func captureScreenshot(labeled: Bool = false, elementId: String? = nil, clip: CGRect? = nil) async throws -> NSImage {
         await ensureNomadScriptInjected()
 
+        if labeled || (elementId != nil && elementId?.contains("f") == true) {
+            let syncScript = """
+            (async function() {
+                if (window.__nomad && window.__nomad.syncSubframes) {
+                    return await window.__nomad.syncSubframes(180);
+                }
+                return { count: 0 };
+            })()
+            """
+            _ = try? await webView.callAsyncJavaScript(syncScript, arguments: [:], in: nil, in: .page)
+        }
+
         // Flush layout and apply sensitive input blurring (plus visual badges if labeled == true)
         let prepScript = """
         (function() {
@@ -2743,16 +2886,63 @@ extension Tab {
             let rectScript = """
             (function() {
                 var targetId = (\(safeElIdArray))[0];
-                var el = window.__nomad && window.__nomad.elements && window.__nomad.elements[targetId];
-                if (!el && window.__nomad && window.__nomad.findInTree) { el = window.__nomad.findInTree(document, targetId); }
-                if (!el) {
-                    try { el = document.querySelector('[data-nomad-id="' + CSS.escape(targetId) + '"]'); } catch(e) {}
+                if (!targetId || typeof targetId !== 'string') return null;
+
+                function resolveRect(tid) {
+                    // 1. Direct query via getElementViewportRect (handles frame IDs like 'f1:e2', selectors, and DOM IDs)
+                    if (window.__nomad && window.__nomad.getElementViewportRect) {
+                        try {
+                            var r = window.__nomad.getElementViewportRect(tid);
+                            if (r && (r.width > 0 || r.height > 0)) {
+                                var rx = r.left !== undefined ? r.left : (r.x !== undefined ? r.x : 0);
+                                var ry = r.top !== undefined ? r.top : (r.y !== undefined ? r.y : 0);
+                                return { x: rx, y: ry, width: r.width, height: r.height };
+                            }
+                        } catch(e) {}
+                    }
+
+                    // 2. Direct lookup in semantic tree bounds cache
+                    var cache = (window.__nomad && window.__nomad.elementsBounds) || window.__nomad_elements_bounds;
+                    if (cache && cache[tid]) {
+                        var b = cache[tid];
+                        if (b && (b.width > 0 || b.height > 0)) {
+                            var bx = b.left !== undefined ? b.left : (b.x !== undefined ? b.x : 0);
+                            var by = b.top !== undefined ? b.top : (b.y !== undefined ? b.y : 0);
+                            return { x: bx, y: by, width: b.width, height: b.height };
+                        }
+                    }
+
+                    // 3. Fallback: resolve DOM element directly in top document or open shadow tree
+                    var el = window.__nomad && window.__nomad.elements && window.__nomad.elements[tid];
+                    if (!el && window.__nomad && window.__nomad.findInTree) {
+                        el = window.__nomad.findInTree(document, tid);
+                    }
+                    if (!el) {
+                        try { el = document.querySelector('[data-nomad-id="' + CSS.escape(tid) + '"]'); } catch(e) {}
+                    }
+                    if (!el) {
+                        try { el = document.querySelector(tid); } catch(e) {}
+                    }
+                    if (el) {
+                        var er = (window.__nomad && window.__nomad.getElementViewportRect) ? window.__nomad.getElementViewportRect(el) : el.getBoundingClientRect();
+                        if (er && (er.width > 0 || er.height > 0)) {
+                            var erx = er.left !== undefined ? er.left : (er.x !== undefined ? er.x : 0);
+                            var ery = er.top !== undefined ? er.top : (er.y !== undefined ? er.y : 0);
+                            return { x: erx, y: ery, width: er.width, height: er.height };
+                        }
+                    }
+
+                    return null;
                 }
-                if (el) {
-                    var r = (window.__nomad && window.__nomad.getElementViewportRect) ? window.__nomad.getElementViewportRect(el) : el.getBoundingClientRect();
-                    return { x: r.left, y: r.top, width: r.width, height: r.height };
+
+                var res = resolveRect(targetId);
+                if (!res && window.__nomad && window.__nomad.getSemanticTree) {
+                    try {
+                        window.__nomad.getSemanticTree();
+                        res = resolveRect(targetId);
+                    } catch(e) {}
                 }
-                return null;
+                return res;
             })()
             """
             if let dict = (try? await webView.evaluateJavaScript(rectScript)) as? [String: Any],
