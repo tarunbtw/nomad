@@ -354,6 +354,95 @@ enum NomadDOMScript {
             return false;
         }
 
+        // Dispatches full HTML5 Drag and Drop event sequence with DataTransfer
+        function dispatchHtml5Drag(targetId, fromX, fromY, toX, toY, optEl) {
+            var nomad = (typeof window !== 'undefined' && window.__nomad) ? window.__nomad : (this || {});
+            var el = optEl || null;
+            if (!el && targetId) {
+                el = (nomad.elements && nomad.elements[targetId] && nomad.isNodeConnected && nomad.isNodeConnected(nomad.elements[targetId]) ? nomad.elements[targetId] : null) || (nomad.findInTree ? nomad.findInTree(document, targetId) : document.getElementById(targetId));
+            }
+            if (!el && fromX !== undefined && fromY !== undefined) {
+                el = document.elementFromPoint(fromX, fromY);
+            }
+            if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No source element for drag action', elementId: targetId };
+
+            if (toX === undefined || toX === null || toY === undefined || toY === null) {
+                return { success: false, code: 'MISSING_DESTINATION', message: 'Missing destination coordinates (toX, toY) for drag action', elementId: targetId };
+            }
+
+            if (el.scrollIntoView) {
+                try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
+            }
+
+            var srcRect = el.getBoundingClientRect ? el.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+            var startX = (fromX !== undefined && fromX !== null) ? Number(fromX) : Math.round(srcRect.left + srcRect.width / 2);
+            var startY = (fromY !== undefined && fromY !== null) ? Number(fromY) : Math.round(srcRect.top + srcRect.height / 2);
+            var destX = Number(toX);
+            var destY = Number(toY);
+
+            var dt = new DataTransfer();
+            try { dt.effectAllowed = 'all'; } catch(e) {}
+
+            var dragStartEvt = new DragEvent('dragstart', {
+                bubbles: true,
+                cancelable: true,
+                clientX: startX,
+                clientY: startY,
+                dataTransfer: dt
+            });
+            el.dispatchEvent(dragStartEvt);
+
+            var destEl = document.elementFromPoint(destX, destY) || el;
+            if (destEl && destEl.tagName === 'IFRAME') {
+                try {
+                    var fDoc = destEl.contentDocument || (destEl.contentWindow ? destEl.contentWindow.document : null);
+                    if (fDoc) {
+                        var ifrRect = destEl.getBoundingClientRect();
+                        var subEl = fDoc.elementFromPoint(destX - ifrRect.left, destY - ifrRect.top);
+                        if (subEl) destEl = subEl;
+                    }
+                } catch(e) {}
+            }
+
+            var dragEnterEvt = new DragEvent('dragenter', {
+                bubbles: true,
+                cancelable: true,
+                clientX: destX,
+                clientY: destY,
+                dataTransfer: dt
+            });
+            destEl.dispatchEvent(dragEnterEvt);
+
+            var dragOverEvt = new DragEvent('dragover', {
+                bubbles: true,
+                cancelable: true,
+                clientX: destX,
+                clientY: destY,
+                dataTransfer: dt
+            });
+            destEl.dispatchEvent(dragOverEvt);
+
+            var dropEvt = new DragEvent('drop', {
+                bubbles: true,
+                cancelable: true,
+                clientX: destX,
+                clientY: destY,
+                dataTransfer: dt
+            });
+            destEl.dispatchEvent(dropEvt);
+
+            var dragEndEvt = new DragEvent('dragend', {
+                bubbles: true,
+                cancelable: true,
+                clientX: destX,
+                clientY: destY,
+                dataTransfer: dt
+            });
+            el.dispatchEvent(dragEndEvt);
+
+            return { success: true, code: 'SUCCESS', message: 'Dragged ' + (targetId || 'element') + ' to (' + destX + ', ' + destY + ')', elementId: targetId };
+        }
+
         if (!window.__nomad_frames) window.__nomad_frames = {};
         if (!window.__nomad_frame_listener_attached) {
             window.__nomad_frame_listener_attached = true;
@@ -397,6 +486,7 @@ enum NomadDOMScript {
             isSensitiveField: isSensitiveField,
             isSensitiveValue: isSensitiveValue,
             isLuhnValid: isLuhnValid,
+            dispatchHtml5Drag: dispatchHtml5Drag,
 
             // Actively synchronize and scan all visible subframes (fixes async timing and in-frame navigation)
             syncSubframes: function(timeoutMs) {
@@ -1282,9 +1372,12 @@ enum NomadDOMScript {
                     }
                 }
 
-                var targetRequiredActions = ['type', 'clear', 'selectoption', 'drag', 'highlight', 'upload'];
+                var targetRequiredActions = ['type', 'clear', 'selectoption', 'highlight', 'upload'];
                 if (targetRequiredActions.indexOf(action) !== -1 && !targetId) {
                     return { success: false, code: 'MISSING_TARGET', message: 'No target element specified for ' + action + ' action' };
+                }
+                if (action === 'drag' && !targetId && (actionObj.x === undefined || actionObj.y === undefined)) {
+                    return { success: false, code: 'MISSING_TARGET', message: 'No target element or coordinates specified for drag action' };
                 }
 
                 // Sub-frame action routing for frame-qualified targets (e.g. 'f1:e2' or 'e2:f1')
@@ -1314,6 +1407,10 @@ enum NomadDOMScript {
                             };
                         }
                     }
+                }
+
+                if (!el && actionObj.x !== undefined && actionObj.y !== undefined) {
+                    el = document.elementFromPoint(actionObj.x, actionObj.y);
                 }
 
                 if (targetId && !el && action !== 'scroll' && action !== 'press') {
@@ -1526,23 +1623,11 @@ enum NomadDOMScript {
                         return { success: true, message: inputMsg, elementId: targetId };
 
                     case 'drag':
-                        if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No target element for drag action' };
-                        el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-                        var srcRect = el.getBoundingClientRect();
-                        var startX = Math.round(srcRect.left + srcRect.width / 2);
-                        var startY = Math.round(srcRect.top + srcRect.height / 2);
-                        var destX = actionObj.toX !== undefined ? actionObj.toX : startX;
-                        var destY = actionObj.toY !== undefined ? actionObj.toY : startY;
-
-                        var dt = new DataTransfer();
-                        el.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, clientX: startX, clientY: startY, dataTransfer: dt }));
-
-                        var destEl = document.elementFromPoint(destX, destY) || el;
-                        destEl.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, clientX: destX, clientY: destY, dataTransfer: dt }));
-                        destEl.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: destX, clientY: destY, dataTransfer: dt }));
-                        el.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, clientX: destX, clientY: destY, dataTransfer: dt }));
-
-                        return { success: true, message: 'Dragged ' + (targetId || 'element') + ' to (' + destX + ', ' + destY + ')' };
+                        if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No target element for drag action', elementId: targetId };
+                        if (actionObj.toX === undefined || actionObj.toX === null || actionObj.toY === undefined || actionObj.toY === null) {
+                            return { success: false, code: 'MISSING_DESTINATION', message: 'Missing destination coordinates (toX, toY) for drag action', elementId: targetId };
+                        }
+                        return dispatchHtml5Drag(targetId, actionObj.x, actionObj.y, actionObj.toX, actionObj.toY, el);
 
                     case 'press':
                         var rawKey = actionObj.key || actionObj.text || 'Enter';
@@ -1726,7 +1811,7 @@ enum NomadDOMScript {
                     default:
                         return { success: false, code: 'UNKNOWN_ACTION', message: 'Unknown action: ' + action };
                 }
-            })(this);
+            }).call(this, this);
 
             if (actionOutcome && actionOutcome.success && wasHealed) {
                 actionOutcome.healed = true;
@@ -2302,7 +2387,16 @@ extension Tab {
             let toPt = CGPoint(x: toX, y: toY)
             let fromWin = webView.convert(fromPt, to: nil)
             let toWin = webView.convert(toPt, to: nil)
+            let screenFromPoint = webView.window?.convertPoint(toScreen: fromWin) ?? fromWin
+            let screenToPoint = webView.window?.convertPoint(toScreen: toWin) ?? toWin
+            let primaryScreenH = NSScreen.screens.first?.frame.height ?? 1080
+            let cgFromPos = CGPoint(x: screenFromPoint.x, y: primaryScreenH - screenFromPoint.y)
+            let cgToPos = CGPoint(x: screenToPoint.x, y: primaryScreenH - screenToPoint.y)
 
+            // 1. Native mouse down (CoreGraphics & AppKit)
+            if let cgDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: cgFromPos, mouseButton: .left) {
+                cgDown.postToPid(ProcessInfo.processInfo.processIdentifier)
+            }
             if let down = NSEvent.mouseEvent(with: .leftMouseDown, location: fromWin, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1.0) {
                 webView.mouseDown(with: down)
             }
@@ -2311,10 +2405,26 @@ extension Tab {
                 let factor = CGFloat(i) / CGFloat(steps)
                 let intermediate = CGPoint(x: fromPt.x + (toPt.x - fromPt.x) * factor, y: fromPt.y + (toPt.y - fromPt.y) * factor)
                 let intermediateWin = webView.convert(intermediate, to: nil)
+                let intermediateScreen = webView.window?.convertPoint(toScreen: intermediateWin) ?? intermediateWin
+                let cgIntermediatePos = CGPoint(x: intermediateScreen.x, y: primaryScreenH - intermediateScreen.y)
+
+                if let cgDrag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: cgIntermediatePos, mouseButton: .left) {
+                    cgDrag.postToPid(ProcessInfo.processInfo.processIdentifier)
+                }
                 if let drag = NSEvent.mouseEvent(with: .leftMouseDragged, location: intermediateWin, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1.0) {
                     webView.mouseDragged(with: drag)
                 }
                 try? await Task.sleep(nanoseconds: 15_000_000)
+            }
+
+            // 2. Dispatch HTML5 Drag & Drop pipeline (dragstart -> dragenter -> dragover -> drop -> dragend)
+            let escapedTarget = (action.target ?? "").replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            let dragScript = "JSON.stringify(window.__nomad.dispatchHtml5Drag(\"\(escapedTarget)\", \(fromPt.x), \(fromPt.y), \(toPt.x), \(toPt.y)))"
+            _ = try? await webView.evaluateJavaScript(dragScript)
+
+            // 3. Native mouse up (CoreGraphics & AppKit)
+            if let cgUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: cgToPos, mouseButton: .left) {
+                cgUp.postToPid(ProcessInfo.processInfo.processIdentifier)
             }
             if let up = NSEvent.mouseEvent(with: .leftMouseUp, location: toWin, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0.0) {
                 webView.mouseUp(with: up)
