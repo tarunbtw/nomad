@@ -627,6 +627,10 @@ enum NomadDOMScript {
                     if (resolvedNode) element = resolvedNode;
                     else return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, isEditable: false, tagName: '' };
                 }
+                try {
+                    if (element.scrollIntoViewIfNeeded) element.scrollIntoViewIfNeeded();
+                    else element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                } catch(e) {}
                 var r = element.getBoundingClientRect();
                 var curWin = (element.ownerDocument && element.ownerDocument.defaultView) ? element.ownerDocument.defaultView : window;
                 var x = r.left;
@@ -2150,7 +2154,8 @@ extension Tab {
         }
 
         // Native AppKit & CoreGraphics hardware input dispatch (isTrusted: true)
-        let isNative = (action.native == true) || action.action.lowercased().hasPrefix("native_")
+        // Note: 'hover' requires native cursor positioning and mouse moved event to activate CSS :hover pseudo-class
+        let isNative = (action.native == true) || action.action.lowercased().hasPrefix("native_") || action.action.lowercased() == "hover"
         if isNative {
             var nativeRes = try await performNativeAction(action)
             nativeRes.lastDialog = self.lastDialog
@@ -2407,9 +2412,26 @@ extension Tab {
 
         case "hover":
             guard let pt = targetPoint else {
-                return NomadActionResult(success: false, message: "Missing target for native hover", elementId: action.target, code: "MISSING_TARGET")
+                return NomadActionResult(success: false, message: "Missing target element or (x, y) coordinates for hover", elementId: action.target, code: "MISSING_TARGET", lastDialog: self.lastDialog, hasPendingDialog: self.pendingDialog != nil)
             }
             let winPoint = webView.convert(pt, to: nil)
+            let screenPoint = webView.window?.convertPoint(toScreen: winPoint) ?? winPoint
+            let primaryScreenH = NSScreen.screens.first?.frame.height ?? 1080
+            let cgPos = CGPoint(x: screenPoint.x, y: primaryScreenH - screenPoint.y)
+
+            if let win = webView.window {
+                win.acceptsMouseMovedEvents = true
+            }
+
+            // 1. Move hardware system cursor to target location
+            CGWarpMouseCursorPosition(cgPos)
+
+            // 2. Post CoreGraphics mouseMoved event to application event stream
+            if let cgMove = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: cgPos, mouseButton: .center) {
+                cgMove.postToPid(ProcessInfo.processInfo.processIdentifier)
+            }
+
+            // 3. Dispatch AppKit NSEvent directly to WKContentView and NSWindow
             if let moveEvent = NSEvent.mouseEvent(
                 with: .mouseMoved,
                 location: winPoint,
@@ -2421,9 +2443,44 @@ extension Tab {
                 clickCount: 0,
                 pressure: 0.0
             ) {
-                webView.mouseMoved(with: moveEvent)
+                let targetView = webView.window?.contentView?.hitTest(winPoint) ?? webView
+                targetView.mouseMoved(with: moveEvent)
+                webView.window?.sendEvent(moveEvent)
             }
-            return NomadActionResult(success: true, message: "Native hover dispatched at (\(Int(pt.x)), \(Int(pt.y)))", elementId: action.target, code: "SUCCESS", native: true, isTrusted: true)
+
+            // 4. Also dispatch synthetic pointer & mouse events to the target element in JS (covers Shadow DOM & custom listeners)
+            if let target = action.target, !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let escapedTarget = target.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+                let jsDispatch = """
+                (function() {
+                    try {
+                        var el = (window.__nomad && window.__nomad.elements && window.__nomad.elements["\(escapedTarget)"]) || (window.__nomad && window.__nomad.findInTree && window.__nomad.findInTree(document, "\(escapedTarget)")) || document.querySelector("[data-nomad-id='\(escapedTarget)']") || document.querySelector("\(escapedTarget)");
+                        if (el) {
+                            var elDoc = el.ownerDocument || document;
+                            var elWin = elDoc.defaultView || window;
+                            el.dispatchEvent(new elWin.PointerEvent('pointerover', { bubbles: true, cancelable: true, view: elWin }));
+                            el.dispatchEvent(new elWin.PointerEvent('pointerenter', { bubbles: false, cancelable: false, view: elWin }));
+                            el.dispatchEvent(new elWin.MouseEvent('mouseover', { bubbles: true, cancelable: true, view: elWin }));
+                            el.dispatchEvent(new elWin.MouseEvent('mousemove', { bubbles: true, cancelable: true, view: elWin }));
+                        }
+                    } catch(e) {}
+                })()
+                """
+                _ = try? await webView.evaluateJavaScript(jsDispatch)
+            }
+
+            try? await Task.sleep(nanoseconds: 30_000_000)
+
+            return NomadActionResult(
+                success: true,
+                message: "Hover dispatched at (\(Int(pt.x)), \(Int(pt.y))) with isTrusted: true",
+                elementId: action.target,
+                code: "SUCCESS",
+                native: true,
+                isTrusted: true,
+                lastDialog: self.lastDialog,
+                hasPendingDialog: self.pendingDialog != nil
+            )
 
         case "drag":
             guard let fromPt = targetPoint else {

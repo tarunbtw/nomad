@@ -1130,6 +1130,23 @@ extension Tab: WKNavigationDelegate, WKUIDelegate {
 final class BrowserWebView: WKWebView {
     weak var tab: Tab?
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.acceptsMouseMovedEvents = true
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let winPoint = event.locationInWindow
+        let leaf = window?.contentView?.hitTest(winPoint)
+        if let leaf = leaf, leaf !== self {
+            leaf.mouseMoved(with: event)
+        } else if let sub = subviews.first(where: { NSStringFromClass(type(of: $0)).contains("WKContentView") }) {
+            sub.mouseMoved(with: event)
+        } else {
+            super.mouseMoved(with: event)
+        }
+    }
+
     private var swipeAccumulatedX: CGFloat = 0
     private var isTrackingSwipe = false
     private var swipeDirection: Tab.SwipeDirection? = nil
