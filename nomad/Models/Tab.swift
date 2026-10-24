@@ -162,6 +162,12 @@ final class Tab: NSObject, Identifiable, ObservableObject {
             }
         }
     }
+
+    func clearStagedUpload() {
+        stagedUploadTimeoutTimer?.invalidate()
+        stagedUploadTimeoutTimer = nil
+        stagedUploadURLs = nil
+    }
     
     /// The retained custom web view for this tab.
     private(set) var webView: BrowserWebView

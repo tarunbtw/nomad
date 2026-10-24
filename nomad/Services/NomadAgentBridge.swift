@@ -263,6 +263,37 @@ enum NomadDOMScript {
             return false;
         }
 
+        // Resolves an <input type="file"> from an element, associated <label>, aria-controls, or container
+        function resolveFileInput(node) {
+            if (!node) return null;
+            if (node.tagName === 'INPUT' && (node.type || '').toLowerCase() === 'file') {
+                return node;
+            }
+            if (node.tagName === 'LABEL') {
+                var forId = node.htmlFor || (node.getAttribute && node.getAttribute('for'));
+                if (forId) {
+                    var doc = node.ownerDocument || document;
+                    var targetInput = doc.getElementById(forId);
+                    if (targetInput && targetInput.tagName === 'INPUT' && (targetInput.type || '').toLowerCase() === 'file') {
+                        return targetInput;
+                    }
+                }
+                var childInput = node.querySelector ? node.querySelector('input[type="file"]') : null;
+                if (childInput) return childInput;
+            }
+            if (node.getAttribute) {
+                var ariaCtrl = node.getAttribute('aria-controls');
+                if (ariaCtrl) {
+                    var docA = node.ownerDocument || document;
+                    var ctrlEl = docA.getElementById(ariaCtrl);
+                    if (ctrlEl && ctrlEl.tagName === 'INPUT' && (ctrlEl.type || '').toLowerCase() === 'file') {
+                        return ctrlEl;
+                    }
+                }
+            }
+            return node.querySelector ? node.querySelector('input[type="file"]') : null;
+        }
+
         // Luhn algorithm check for payment cards
         function isLuhnValid(val) {
             var digits = String(val).replace(/[\\s-]/g, '');
@@ -1162,6 +1193,8 @@ enum NomadDOMScript {
                                 if (!isTextEditable(el)) isIncompatible = true;
                             } else if (action === 'selectoption') {
                                 if (elTag !== 'select') isIncompatible = true;
+                            } else if (action === 'upload') {
+                                if (!resolveFileInput(el)) isIncompatible = true;
                             }
                         }
 
@@ -1181,7 +1214,7 @@ enum NomadDOMScript {
                     // If still incompatible after healing attempt, explicitly report STALE_REF
                     if (el && isIncompatible) {
                         var currentDesc = '<' + (el.tagName ? el.tagName.toLowerCase() : 'element') + '>';
-                        var expectedDesc = (sig && sig.tag) ? '<' + sig.tag + '>' : 'an editable control';
+                        var expectedDesc = (sig && sig.tag) ? '<' + sig.tag + '>' : (action === 'upload' ? 'a file input control' : 'an editable control');
                         return {
                             success: false,
                             staleRef: true,
@@ -1599,32 +1632,37 @@ enum NomadDOMScript {
 
                     case 'upload':
                         if (!el) return { success: false, code: 'MISSING_TARGET', message: 'No target element for upload action' };
-                        if (el.ownerDocument && el.ownerDocument !== document && el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement) {
-                            try { el.ownerDocument.defaultView.frameElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
+                        var fileInput = resolveFileInput(el);
+                        if (!fileInput) {
+                            var tagDesc = el.tagName ? el.tagName.toLowerCase() : 'element';
+                            return {
+                                success: false,
+                                code: 'INVALID_TARGET',
+                                message: "Target element '" + (targetId || 'element') + "' (<" + tagDesc + ">) is not an <input type='file'> and has no associated file input",
+                                elementId: targetId
+                            };
                         }
-                        el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-                        try { el.focus(); } catch(e) {}
-
-                        // Resolve file input: el directly, or if label/button, find input[type=file]
-                        var fileInput = null;
-                        if (el.tagName === 'INPUT' && (el.type || '').toLowerCase() === 'file') {
-                            fileInput = el;
-                        } else if (el.tagName === 'LABEL') {
-                            var targetInput = el.htmlFor ? (el.ownerDocument ? el.ownerDocument.getElementById(el.htmlFor) : document.getElementById(el.htmlFor)) : el.querySelector('input[type="file"]');
-                            if (targetInput && targetInput.tagName === 'INPUT' && (targetInput.type || '').toLowerCase() === 'file') {
-                                fileInput = targetInput;
-                            }
-                        } else {
-                            fileInput = el.querySelector('input[type="file"]');
+                        if (fileInput.disabled) {
+                            return {
+                                success: false,
+                                code: 'ELEMENT_DISABLED',
+                                message: "Target file input '" + (targetId || 'element') + "' is disabled",
+                                elementId: targetId
+                            };
                         }
 
-                        var targetToClick = fileInput || el;
+                        if (fileInput.ownerDocument && fileInput.ownerDocument !== document && fileInput.ownerDocument.defaultView && fileInput.ownerDocument.defaultView.frameElement) {
+                            try { fileInput.ownerDocument.defaultView.frameElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
+                        }
+                        fileInput.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                        try { fileInput.focus(); } catch(e) {}
+
                         try {
-                            targetToClick.click();
+                            fileInput.click();
                         } catch(e) {
-                            var elDocU = targetToClick.ownerDocument || document;
+                            var elDocU = fileInput.ownerDocument || document;
                             var elWinU = elDocU.defaultView || window;
-                            targetToClick.dispatchEvent(new elWinU.MouseEvent('click', { bubbles: true, cancelable: true, view: elWinU }));
+                            fileInput.dispatchEvent(new elWinU.MouseEvent('click', { bubbles: true, cancelable: true, view: elWinU }));
                         }
                         return { success: true, message: 'Triggered file upload on ' + (targetId || 'element'), elementId: targetId };
 
@@ -1978,15 +2016,21 @@ extension Tab {
                 return NomadActionResult(success: false, message: "Failed to parse action result JSON", elementId: action.target, code: "ACTION_PARSE_ERROR")
             }
             var res = try JSONDecoder().decode(NomadActionResult.self, from: resultData)
-            if action.action.lowercased() == "upload" && res.success {
-                res.files = action.resolvedPaths
-                res.count = action.resolvedPaths.count
-                res.message = "Successfully uploaded \(res.count ?? 1) file(s) to \(action.target ?? "element")"
+            if action.action.lowercased() == "upload" {
+                if res.success {
+                    res.files = action.resolvedPaths
+                    res.count = action.resolvedPaths.count
+                    res.message = "Successfully uploaded \(res.count ?? 1) file(s) to \(action.target ?? "element")"
+                } else {
+                    self.clearStagedUpload()
+                }
             }
             return res
         } catch let decodeErr as DecodingError {
+            if action.action.lowercased() == "upload" { self.clearStagedUpload() }
             return NomadActionResult(success: false, message: "Failed to decode action result: \(decodeErr.localizedDescription)", elementId: action.target, code: "ACTION_DECODE_ERROR")
         } catch {
+            if action.action.lowercased() == "upload" { self.clearStagedUpload() }
             return NomadActionResult(
                 success: false,
                 message: "JavaScript evaluation failed: \(error.localizedDescription)",
