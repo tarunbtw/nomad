@@ -467,7 +467,7 @@ enum NomadDOMScript {
 
             // Viewport-relative bounding rect accounting for parent frame offsets
             getElementViewportRect: function(element) {
-                if (!element) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+                if (!element) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, isEditable: false, tagName: '' };
                 if (typeof element === 'string') {
                     var frameTarget = parseFrameTarget(element);
                     if (frameTarget) {
@@ -481,13 +481,20 @@ enum NomadDOMScript {
                                 for (var ei = 0; ei < fData.elements.length; ei++) {
                                     if (fData.elements[ei].id === eId) {
                                         var eb = fData.elements[ei].bounds;
+                                        var fe = fData.elements[ei];
+                                        var fTag = (fe.tag || '').toLowerCase();
+                                        var fType = (fe.type || 'text').toLowerCase();
+                                        var nonText = ['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file', 'range', 'color', 'hidden'];
+                                        var fEditable = (fTag === 'textarea' || (fTag === 'input' && nonText.indexOf(fType) === -1)) && !fe.readOnly && !fe.disabled;
                                         return {
                                             left: Math.round(ifrRect.left + eb.x),
                                             top: Math.round(ifrRect.top + eb.y),
                                             right: Math.round(ifrRect.left + eb.x + eb.width),
                                             bottom: Math.round(ifrRect.top + eb.y + eb.height),
                                             width: Math.round(eb.width),
-                                            height: Math.round(eb.height)
+                                            height: Math.round(eb.height),
+                                            isEditable: fEditable,
+                                            tagName: fTag
                                         };
                                     }
                                 }
@@ -498,13 +505,15 @@ enum NomadDOMScript {
                                 right: Math.round(ifrRect.right),
                                 bottom: Math.round(ifrRect.bottom),
                                 width: Math.round(ifrRect.width),
-                                height: Math.round(ifrRect.height)
+                                height: Math.round(ifrRect.height),
+                                isEditable: false,
+                                tagName: 'iframe'
                             };
                         }
                     }
-                    var resolvedNode = (this.elements && this.elements[element]) || this.findInTree(document, element);
+                    var resolvedNode = (this.elements && this.elements[element] && this.isNodeConnected(this.elements[element]) ? this.elements[element] : null) || this.findInTree(document, element);
                     if (resolvedNode) element = resolvedNode;
-                    else return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+                    else return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, isEditable: false, tagName: '' };
                 }
                 var r = element.getBoundingClientRect();
                 var curWin = (element.ownerDocument && element.ownerDocument.defaultView) ? element.ownerDocument.defaultView : window;
@@ -524,7 +533,9 @@ enum NomadDOMScript {
                     right: Math.round(x + r.width),
                     bottom: Math.round(y + r.height),
                     width: Math.round(r.width),
-                    height: Math.round(r.height)
+                    height: Math.round(r.height),
+                    isEditable: isTextEditable(element),
+                    tagName: (element.tagName || '').toLowerCase()
                 };
             },
 
@@ -569,6 +580,52 @@ enum NomadDOMScript {
                     }
                 } catch(e) {}
                 return null;
+            },
+
+            // Reliably scrolls and focuses an editable target, verifying activeElement state
+            focusElement: function(element) {
+                if (!element) return { success: false, code: 'MISSING_TARGET', message: 'No target element to focus' };
+                if (typeof element === 'string') {
+                    var resolvedNode = (this.elements && this.elements[element] && this.isNodeConnected(this.elements[element]) ? this.elements[element] : null) || this.findInTree(document, element);
+                    if (resolvedNode) element = resolvedNode;
+                    else return { success: false, code: 'ELEMENT_NOT_FOUND', message: 'Target element not found to focus' };
+                }
+                try {
+                    if (element.ownerDocument && element.ownerDocument !== document && element.ownerDocument.defaultView && element.ownerDocument.defaultView.frameElement) {
+                        try { element.ownerDocument.defaultView.frameElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
+                        try { element.ownerDocument.defaultView.focus(); } catch(e) {}
+                    }
+                    if (element.scrollIntoView) {
+                        try { element.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch(e) {}
+                    }
+                    element.focus({ preventScroll: true });
+                } catch(e) {
+                    return { success: false, code: 'FOCUS_ERROR', message: e.message || 'Error focusing element' };
+                }
+                var doc = element.ownerDocument || document;
+                var active = doc.activeElement;
+                var isFocused = (active === element) || (element.contains && element.contains(active));
+                if (!isFocused && element.isContentEditable) {
+                    try {
+                        var win = doc.defaultView || window;
+                        var sel = win.getSelection();
+                        if (sel) {
+                            var range = doc.createRange();
+                            range.selectNodeContents(element);
+                            range.collapse(false);
+                            sel.removeAllRanges();
+                            sel.addRange(range);
+                        }
+                        isFocused = true;
+                    } catch(e) {}
+                }
+                var activeTag = active && active.tagName ? active.tagName.toLowerCase() : 'body';
+                return {
+                    success: isFocused,
+                    activeTag: activeTag,
+                    code: isFocused ? 'SUCCESS' : 'FOCUS_FAILED',
+                    message: isFocused ? 'Element focused' : ('Failed to establish focus on <' + (element.tagName || '').toLowerCase() + '>; activeElement is <' + activeTag + '>')
+                };
             },
 
             // 1. Scans visible interactive targets across Light and Shadow DOM and iframes
@@ -2112,11 +2169,13 @@ extension Tab {
     func performNativeAction(_ action: NomadAction) async throws -> NomadActionResult {
         await ensureNomadScriptInjected()
 
-        // 1. Resolve target coordinates in web view viewport space
+        // 1. Resolve target coordinates and element properties in web view viewport space
         var targetPoint: CGPoint? = nil
-        if let ax = action.x, let ay = action.y {
-            targetPoint = CGPoint(x: ax, y: ay)
-        } else if let target = action.target, !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        var isTargetEditable = false
+        var targetTagName = ""
+        let hasTarget = action.target.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
+
+        if let target = action.target, hasTarget {
             let escaped = target.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
             let script = "JSON.stringify(window.__nomad.getElementViewportRect(\"\(escaped)\"))"
             if let rectStr = try? await webView.evaluateJavaScript(script) as? String,
@@ -2128,6 +2187,8 @@ extension Tab {
                let h = (rect["height"] as? NSNumber)?.doubleValue,
                (w > 0 || h > 0) {
                 targetPoint = CGPoint(x: x + w / 2.0, y: y + h / 2.0)
+                isTargetEditable = rect["isEditable"] as? Bool ?? false
+                targetTagName = (rect["tagName"] as? String ?? "").lowercased()
             } else {
                 return NomadActionResult(
                     success: false,
@@ -2138,9 +2199,14 @@ extension Tab {
             }
         }
 
+        if let ax = action.x, let ay = action.y {
+            targetPoint = CGPoint(x: ax, y: ay)
+        }
+
         let rawType = action.action.lowercased().replacingOccurrences(of: "native_", with: "")
 
         // 2. Bring window and web view to front for active hardware input
+        NSApp.activate(ignoringOtherApps: true)
         if let win = webView.window {
             if !win.isKeyWindow {
                 win.makeKeyAndOrderFront(nil)
@@ -2259,13 +2325,59 @@ extension Tab {
             guard let text = action.text else {
                 return NomadActionResult(success: false, message: "Missing 'text' for native type action", elementId: action.target, code: "MISSING_TEXT")
             }
-            // Click target first to focus if element specified
+            guard hasTarget, let target = action.target else {
+                return NomadActionResult(
+                    success: false,
+                    message: "Missing target element for native type action",
+                    elementId: action.target,
+                    code: "MISSING_TARGET"
+                )
+            }
+            if !isTargetEditable {
+                let tag = targetTagName.isEmpty ? "element" : targetTagName
+                return NomadActionResult(
+                    success: false,
+                    message: "Target element <\(tag)> is not editable or an input control",
+                    elementId: target,
+                    code: "NOT_EDITABLE"
+                )
+            }
+
+            // Establish DOM focus on the target element and fail loudly if focus cannot be set
+            let escapedTarget = target.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            let focusScript = "JSON.stringify(window.__nomad.focusElement(\"\(escapedTarget)\"))"
+            if let focusStr = try? await webView.evaluateJavaScript(focusScript) as? String,
+               let focusData = focusStr.data(using: .utf8),
+               let focusRes = try? JSONSerialization.jsonObject(with: focusData) as? [String: Any] {
+                let focused = focusRes["success"] as? Bool ?? false
+                if !focused {
+                    let msg = focusRes["message"] as? String ?? "Failed to establish focus on target element '\(target)'"
+                    return NomadActionResult(
+                        success: false,
+                        message: msg,
+                        elementId: target,
+                        code: "FOCUS_FAILED"
+                    )
+                }
+            }
+
+            // Click target with native CoreGraphics and AppKit events to ensure full window & gesture activation
             if let pt = targetPoint {
                 let winPoint = webView.convert(pt, to: nil)
+                let screenPoint = webView.window?.convertPoint(toScreen: winPoint) ?? winPoint
+                let primaryScreenH = NSScreen.screens.first?.frame.height ?? 1080
+                let cgPos = CGPoint(x: screenPoint.x, y: primaryScreenH - screenPoint.y)
+
+                if let cgDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: cgPos, mouseButton: .left) {
+                    cgDown.postToPid(ProcessInfo.processInfo.processIdentifier)
+                }
                 if let down = NSEvent.mouseEvent(with: .leftMouseDown, location: winPoint, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1.0) {
                     webView.mouseDown(with: down)
                 }
                 try? await Task.sleep(nanoseconds: 20_000_000)
+                if let cgUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: cgPos, mouseButton: .left) {
+                    cgUp.postToPid(ProcessInfo.processInfo.processIdentifier)
+                }
                 if let up = NSEvent.mouseEvent(with: .leftMouseUp, location: winPoint, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0.0) {
                     webView.mouseUp(with: up)
                 }
