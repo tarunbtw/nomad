@@ -255,17 +255,9 @@ git commit -m "dino: bump to ${NEW_VERSION}"
 git push origin main
 cd "$PROJECT_ROOT"
 
-# 13. Publish NPM package
-echo "==> Publishing NPM package dino-browser..."
-if npm whoami >/dev/null 2>&1; then
-  (cd "$PROJECT_ROOT/sdks/typescript" && npm publish --access public) || echo "⚠️  NPM publish encountered an error, continuing..."
-else
-  echo "ℹ️  NPM not logged in, skipping npm publish. Run 'npm login && npm publish' inside sdks/typescript when ready."
-fi
-
 RELEASE_SUCCESS=true
 
-# 14. Final Summary
+# 13. Final Summary
 echo ""
 echo "=========================================================="
 echo "🎉 Dino v${NEW_VERSION} successfully published and distributed!"
@@ -274,6 +266,9 @@ echo "  Archive:   ${ZIP_PATH}"
 echo "  SHA-256:   ${SHA256}"
 echo "  Release:   https://github.com/tarunbtw/dino/releases/tag/v${NEW_VERSION}"
 echo "  Homebrew:  Pushed to tarunbtw/homebrew-tap (brew update && brew upgrade dino)"
-echo "  NPM:       dino-browser (v${SDK_VERSION})"
+echo "  SDKs:      Version updated to ${SDK_VERSION}."
+echo ""
+echo "👉 To publish the NPM and Python SDKs, run:"
+echo "   ./scripts/sdks.sh"
 echo "=========================================================="
 echo ""
