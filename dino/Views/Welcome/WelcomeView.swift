@@ -2,9 +2,10 @@
 //  WelcomeView.swift
 //  dino
 //
-//  Created by tarun on 10/11/26.
-//  Editorial first-launch experience over FirstLightScene with serif typography,
-//  default browser selection, and Arc migration.
+//  Created for Dino Browser.
+//  Quiet, editorial first-launch onboarding over DinoStageScene.
+//  Clean typography, essential keyboard shortcuts, optional Arc bookmarks import,
+//  and single "Get Started" action.
 //
 
 import SwiftUI
@@ -18,7 +19,6 @@ struct WelcomeView: View {
     @State private var offersArc: Bool = false
     @State private var arcPlan: ArcImportPlan? = nil
     @State private var isImportingArc: Bool = false
-    @State private var isDefaultBrowser: Bool = false
     @State private var hasImportedArc: Bool = false
 
     init(settings: SettingsStore, store: BrowserStore? = nil, onComplete: (() -> Void)? = nil) {
@@ -29,8 +29,8 @@ struct WelcomeView: View {
 
     var body: some View {
         ZStack {
-            // Calm First Light backdrop with sunrise and drifting snowflakes
-            FirstLightScene(spaceColor: "glacier")
+            // Calm Dino ambient backdrop
+            DinoStageScene(spaceColor: "pine")
                 .ignoresSafeArea()
 
             // Window drag clearance across top edge
@@ -43,48 +43,39 @@ struct WelcomeView: View {
 
             // Centered Editorial Welcome Card
             VStack(spacing: 24) {
-                // Editorial Typography
-                VStack(spacing: 6) {
-                    Text("Welcome in.")
-                        .font(.system(size: 42, weight: .regular, design: .serif))
+                // Editorial Branding & Typography
+                VStack(spacing: 8) {
+                    if let _ = NSImage(named: "DinoMark") {
+                        Image("DinoMark")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 48, height: 48)
+                            .shadow(color: Color(hex: 0x023121, opacity: 0.3), radius: 10, y: 4)
+                    }
+
+                    Text("Welcome to Dino")
+                        .font(.system(size: 38, weight: .semibold, design: .serif))
                         .foregroundStyle(Theme.ink)
 
-                    Text("A calm, minimal browser built natively for macOS.")
+                    Text("An ultra-light, native browser built for macOS.")
                         .font(Theme.tabFont)
                         .foregroundStyle(Theme.muted)
                 }
 
                 // Frosted Action Card
                 let shape = RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous)
-                VStack(alignment: .leading, spacing: 20) {
-                    // Default Browser Toggle Row
-                    HStack(spacing: 12) {
-                        Image(systemName: isDefaultBrowser ? "checkmark.circle.fill" : "safari")
-                            .font(.system(size: 20))
-                            .foregroundStyle(isDefaultBrowser ? Theme.frost : Theme.muted)
+                VStack(alignment: .leading, spacing: 18) {
+                    // Essential Shortcuts Section
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("ESSENTIAL SHORTCUTS")
+                            .font(.system(size: 10, weight: .semibold))
+                            .tracking(0.8)
+                            .foregroundStyle(Theme.faint)
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Default Browser")
-                                .font(Theme.tabFont)
-                                .foregroundStyle(Theme.ink)
-                            Text(isDefaultBrowser ? "Dino is currently your default browser" : "Open links from other apps in Dino")
-                                .font(Theme.hintFont)
-                                .foregroundStyle(Theme.muted)
-                        }
-
-                        Spacer()
-
-                        if !isDefaultBrowser {
-                            Button("Make Default") {
-                                makeDefaultBrowser()
-                            }
-                            .buttonStyle(.plain)
-                            .font(Theme.labelFont)
-                            .foregroundStyle(Theme.ink)
-                            .padding(.horizontal, 12)
-                            .frame(height: 28)
-                            .background(Theme.hover, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        }
+                        shortcutRow(keys: "⌘T", label: "Open new tab")
+                        shortcutRow(keys: "⌘L", label: "Jump to address bar")
+                        shortcutRow(keys: "⌘K", label: "Command bar & search")
+                        shortcutRow(keys: "⌥Space", label: "Quick glance peek")
                     }
 
                     // Arc Import Row (if detected on this Mac)
@@ -94,7 +85,7 @@ struct WelcomeView: View {
 
                         HStack(spacing: 12) {
                             Image(systemName: hasImportedArc ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
-                                .font(.system(size: 20))
+                                .font(.system(size: 18))
                                 .foregroundStyle(hasImportedArc ? Theme.frost : Theme.accent)
 
                             VStack(alignment: .leading, spacing: 2) {
@@ -135,47 +126,49 @@ struct WelcomeView: View {
                     // Get Started Button
                     Button(action: finish) {
                         HStack(spacing: 8) {
-                            Text("Start Exploring")
+                            Text("Start Browsing")
                                 .font(Theme.groupHeaderFont)
                             Image(systemName: "arrow.right")
                                 .font(.system(size: 11, weight: .semibold))
                         }
-                        .foregroundStyle(Theme.ink)
+                        .foregroundStyle(Color(hex: 0xFFE5CC))
                         .frame(maxWidth: .infinity)
                         .frame(height: 38)
-                        .background(Theme.spaceColor("glacier"), in: RoundedRectangle(cornerRadius: Theme.tabRadius, style: .continuous))
+                        .background(Color(hex: 0x023121), in: RoundedRectangle(cornerRadius: Theme.tabRadius, style: .continuous))
                     }
                     .buttonStyle(.plain)
                 }
                 .padding(22)
                 .frame(width: 440)
                 .background {
-                    CommandBarGlass(shape: shape, color: Theme.spaceColor("glacier"))
+                    CommandBarGlass(shape: shape, color: Theme.page)
                         .clipShape(shape)
                         .shadow(color: Theme.shadowPeek, radius: 24, y: 12)
                         .shadow(color: Theme.shadowPeek.opacity(0.4), radius: 3, y: 1)
                 }
             }
-            .padding(.top, 40)
+            .padding(.top, 24)
         }
         .task {
-            checkDefaultBrowser()
             await checkForArc()
         }
     }
 
-    private func checkDefaultBrowser() {
-        if let defaultAppURL = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://apple.com")!) {
-            isDefaultBrowser = defaultAppURL.lastPathComponent.contains("Dino")
-        }
-    }
+    @ViewBuilder
+    private func shortcutRow(keys: String, label: String) -> some View {
+        HStack {
+            Text(label)
+                .font(Theme.hintFont)
+                .foregroundStyle(Theme.ink)
 
-    private func makeDefaultBrowser() {
-        if let bundleId = Bundle.main.bundleIdentifier {
-            let cfBundleId = bundleId as CFString
-            LSSetDefaultHandlerForURLScheme("http" as CFString, cfBundleId)
-            LSSetDefaultHandlerForURLScheme("https" as CFString, cfBundleId)
-            checkDefaultBrowser()
+            Spacer()
+
+            Text(keys)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(Theme.muted)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Theme.hover, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
         }
     }
 

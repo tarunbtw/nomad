@@ -33,6 +33,7 @@ final class BrowserStore: ObservableObject {
     @Published var tabs: [Tab] = []
     @Published var activeTabId: UUID?
     @Published var isAddressBarFocused: Bool = false
+    @Published var isEditingCurrentURL: Bool = false
     @Published var splitPairs: [SplitPair] = []
     @Published var spaces: [Space] = Space.defaultSpaces
     @Published var activeSpaceId: UUID = Space.defaultFirstID
@@ -670,6 +671,20 @@ final class BrowserStore: ObservableObject {
 
     func reload() {
         activeTab?.reload()
+    }
+
+    /// Focuses the Omnibox address bar to edit the current tab's URL (pre-filling active URL if available).
+    func focusAddressBar(prefill: Bool = true) {
+        let current = peekTab ?? activeTab
+        let hasURL = current?.url != nil && !(current?.isBlank ?? true)
+        isEditingCurrentURL = prefill && hasURL
+        isAddressBarFocused = true
+    }
+
+    /// Opens the Omnibox cleared for creating a new tab (e.g. ⌘T or clicking + New tab).
+    func openNewTabOmnibox() {
+        isEditingCurrentURL = false
+        isAddressBarFocused = true
     }
 
     /// Opens or switches to the settings internal page (dino://settings).

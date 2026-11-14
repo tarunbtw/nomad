@@ -124,6 +124,7 @@ final class Tab: NSObject, Identifiable, ObservableObject {
     @Published var isInspectorActive: Bool = false
     @Published var isZapperActive: Bool = false
     @Published var isReaderModeActive: Bool = false
+    @Published var isShowingOfflinePage: Bool = false
     @Published var isFloatingVideo: Bool = false
     @Published var wantsNextNewTabInSplit: Bool = false
     // MARK: - Phase 1: Tab Lifecycle, Grouping & Basecamp

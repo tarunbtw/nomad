@@ -298,9 +298,16 @@ struct OmniboxModalView: View {
         }
         .onAppear {
             selectedIndex = 0
-            text = ""
+            if store.isEditingCurrentURL, let active = store.peekTab ?? store.activeTab, let url = active.url, !active.isBlank {
+                text = url.absoluteString
+            } else {
+                text = ""
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 isFieldFocused = true
+                if store.isEditingCurrentURL {
+                    NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+                }
             }
         }
         .onMoveCommand { direction in
@@ -338,7 +345,9 @@ struct OmniboxModalView: View {
             store.openSplit(newT, beside: anchor, on: store.splitPickSide.other)
             return
         }
-        if let active = store.activeTab, active.isBlank {
+        if store.isEditingCurrentURL, let target = store.peekTab ?? store.activeTab {
+            target.load(url: url)
+        } else if let active = store.activeTab, active.isBlank {
             active.load(url: url)
         } else {
             store.newTab(url: url, select: true)
@@ -346,6 +355,7 @@ struct OmniboxModalView: View {
     }
 
     private func dismiss(cancelledByEscape: Bool = false) {
+        store.isEditingCurrentURL = false
         if store.isPickingSplit {
             if cancelledByEscape {
                 store.cancelSplitPick()

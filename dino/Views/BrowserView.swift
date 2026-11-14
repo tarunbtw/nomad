@@ -96,10 +96,10 @@ struct BrowserView: View {
                     TabStageView(store: store, tab: activeTab, settings: settings)
                         .id(activeTab.id)
                 } else {
-                    FirstLightScene(spaceColor: store.activeSpace.colorHex)
+                    DinoStageScene(spaceColor: store.activeSpace.colorHex)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            store.isAddressBarFocused = true
+                            store.openNewTabOmnibox()
                         }
                         .transition(.opacity)
                 }
@@ -245,11 +245,11 @@ struct BrowserView: View {
     @ViewBuilder
     private var keyboardShortcutBridge: some View {
         Group {
-            Button("New Tab") { store.isAddressBarFocused = true }.keyboardShortcut("t", modifiers: .command)
+            Button("New Tab") { store.openNewTabOmnibox() }.keyboardShortcut("t", modifiers: .command)
             Button("Reopen Closed Tab") { store.reopenLastClosedTab() }.keyboardShortcut("t", modifiers: [.command, .shift])
             Button("New Incognito") { store.newIncognitoTab() }.keyboardShortcut("n", modifiers: [.command, .shift])
             Button("Close Tab") { if let activeId = store.activeTabId { store.closeTab(id: activeId) } }.keyboardShortcut("w", modifiers: .command)
-            Button("Address Bar") { store.isAddressBarFocused = true }.keyboardShortcut("l", modifiers: .command)
+            Button("Address Bar") { store.focusAddressBar(prefill: true) }.keyboardShortcut("l", modifiers: .command)
             Button("Reload") { store.reload() }.keyboardShortcut("r", modifiers: .command)
             Button("Back") { store.goBack() }.keyboardShortcut("[", modifiers: .command)
             Button("Forward") { store.goForward() }.keyboardShortcut("]", modifiers: .command)
@@ -328,7 +328,7 @@ private struct TabStageView: View {
             } else if tab.isBlank {
                 // Calm empty start state when tab has no URL loaded
                 ZStack {
-                    FirstLightScene(spaceColor: store.activeSpace.colorHex)
+                    DinoStageScene(spaceColor: store.activeSpace.colorHex)
 
                     if tab.isIncognito {
                         VStack(spacing: 8) {
@@ -348,7 +348,7 @@ private struct TabStageView: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    store.isAddressBarFocused = true
+                    store.openNewTabOmnibox()
                 }
                 .transition(.opacity)
             } else if tab.isFloatingVideo {

@@ -181,7 +181,7 @@ extension Tab: WKNavigationDelegate {
         if webView.magnification != 1.0 {
             webView.setMagnification(1.0, centeredAt: .zero)
         }
-        if let currentURL = webView.url {
+        if let currentURL = webView.url, !self.isShowingOfflinePage {
             fetchFavicon(for: currentURL)
 
             // Record visited page in HistoryStore (only for user profile, bypassed in Incognito mode and Agent profiles)
@@ -245,6 +245,7 @@ extension Tab: WKNavigationDelegate {
         self.currentNavigation = navigation
         self.lastNavigationStartTime = Date()
         self.lastNavigationError = nil
+        self.isShowingOfflinePage = false
 
         let targetUrl = webView.url?.absoluteString ?? self.url?.absoluteString ?? ""
         let docEntry = NetworkEntry(
@@ -288,10 +289,20 @@ extension Tab: WKNavigationDelegate {
 
         self.allowNextFileNavigation = false
         self.isLoading = false
-        self.title = "Error: \(error.localizedDescription)"
         self.lastNavigationFinishTime = Date()
         self.lastNavigationError = error.localizedDescription
         self.lastFailedNavigationSeq = self.navigationSeq
+
+        if DinoOfflinePage.isOfflineError(error) {
+            self.isShowingOfflinePage = true
+            self.title = "No Internet — Dino"
+            let targetURL = self.url ?? URL(string: "about:blank")!
+            let offlineHTML = DinoOfflinePage.html(for: targetURL, error: error)
+            self.webView.loadHTMLString(offlineHTML, baseURL: targetURL)
+            return
+        }
+
+        self.title = "Error: \(error.localizedDescription)"
         DinoAgentServer.shared.broadcastEvent(name: "navigationError", payload: [
             "tabId": self.id.uuidString,
             "error": error.localizedDescription
@@ -316,10 +327,20 @@ extension Tab: WKNavigationDelegate {
         }
         self.allowNextFileNavigation = false
         self.isLoading = false
-        self.title = "Error: \(error.localizedDescription)"
         self.lastNavigationFinishTime = Date()
         self.lastNavigationError = error.localizedDescription
         self.lastFailedNavigationSeq = self.navigationSeq
+
+        if DinoOfflinePage.isOfflineError(error) {
+            self.isShowingOfflinePage = true
+            self.title = "No Internet — Dino"
+            let targetURL = self.url ?? URL(string: "about:blank")!
+            let offlineHTML = DinoOfflinePage.html(for: targetURL, error: error)
+            self.webView.loadHTMLString(offlineHTML, baseURL: targetURL)
+            return
+        }
+
+        self.title = "Error: \(error.localizedDescription)"
         DinoAgentServer.shared.broadcastEvent(name: "navigationError", payload: [
             "tabId": self.id.uuidString,
             "error": error.localizedDescription

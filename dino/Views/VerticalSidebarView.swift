@@ -163,7 +163,7 @@ struct VerticalSidebarView: View {
         HStack(spacing: 6) {
             // Text area clicking opens Omnibox
             Button(action: {
-                store.isAddressBarFocused = true
+                store.focusAddressBar(prefill: true)
             }) {
                 HStack(spacing: 0) {
                     Text(displaySite.isEmpty ? "Search or enter address" : displaySite)
@@ -265,7 +265,7 @@ struct VerticalSidebarView: View {
             if store.isPickingSplit {
                 store.commitSplitPickWithNewTab(selectAnchor: false)
             } else {
-                store.isAddressBarFocused = true
+                store.openNewTabOmnibox()
             }
         }) {
             HStack(spacing: 8) {
