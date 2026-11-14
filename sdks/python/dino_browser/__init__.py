@@ -1,5 +1,5 @@
 """
-Dino Browser Python SDK (v0.41.0)
+Dino Browser Python SDK (v0.42.0)
 High-speed native macOS agentic browser driver, token-optimized perception, and Unix domain socket bridge.
 """
 
@@ -12,7 +12,7 @@ import sys
 import urllib.parse
 from typing import Optional, Dict, Any, List, Union
 
-__version__ = "0.41.0"
+__version__ = "0.42.0"
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -141,10 +141,25 @@ class Dino:
                 pass
         return None
 
+    @staticmethod
+    def _resolve_binary() -> Optional[str]:
+        env_bin = os.environ.get("DINO_BIN")
+        if env_bin and os.path.exists(env_bin):
+            return env_bin
+        app_bin = "/Applications/Dino.app/Contents/MacOS/dino"
+        if os.path.exists(app_bin):
+            return app_bin
+        user_bin = os.path.expanduser("~/.dino/bin/dino")
+        if os.path.exists(user_bin):
+            return user_bin
+        import shutil
+        return shutil.which("dino")
+
     @classmethod
     def start_worker(cls, profile: str = "agent", idle_timeout: int = 60, port: Optional[int] = None) -> "Dino":
         """Spins up a headless Dino worker process and returns a connected client."""
-        cmd = ["dino", "start", "--profile", profile, "--idle-timeout", str(idle_timeout)]
+        binary = cls._resolve_binary() or "dino"
+        cmd = [binary, "start", "--profile", profile, "--idle-timeout", str(idle_timeout)]
         if port:
             cmd.extend(["--port", str(port)])
         res = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -153,6 +168,8 @@ class Dino:
                 p = int(line.split(":")[-1].strip())
                 return cls(port=p)
         return cls(port=port or 9222)
+
+    launch = start_worker
 
     def _get_connection(self, timeout: float = 30.0) -> http.client.HTTPConnection:
         if self.socket_path and os.path.exists(self.socket_path):

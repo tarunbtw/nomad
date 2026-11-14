@@ -47,6 +47,15 @@ export interface ScreenshotOptions {
   tabId?: string;
 }
 
+export interface LaunchOptions {
+  headless?: boolean;
+  profile?: string;
+  idleTimeout?: number;
+  port?: number;
+  binPath?: string;
+  args?: string[];
+}
+
 export interface WaitOptions {
   mode?: 'auto' | 'stability' | 'selector' | 'networkidle' | 'url';
   selector?: string;
@@ -85,22 +94,122 @@ export class Dino {
     return '';
   }
 
-  static resolveSocketPath(): string | undefined {
-    const dinoSock = path.join(os.homedir(), '.dino', 'dino.sock');
-    if (fs.existsSync(dinoSock)) return dinoSock;
+  static resolveSocketPath(profile?: string): string | undefined {
+    const dinoDir = path.join(os.homedir(), '.dino');
+    const workersDir = path.join(dinoDir, 'workers');
 
-    // Check for running headless worker socket in .dino
-    const workersDir = path.join(os.homedir(), '.dino', 'workers');
-    try {
-      if (fs.existsSync(workersDir)) {
+    // 1. If profile specified, search worker descriptors
+    if (profile && fs.existsSync(workersDir)) {
+      try {
+        const files = fs.readdirSync(workersDir);
+        for (const file of files) {
+          if (file.startsWith('worker-') && file.endsWith('.json')) {
+            const raw = fs.readFileSync(path.join(workersDir, file), 'utf8');
+            const data = JSON.parse(raw);
+            if (data.profile === profile && fs.existsSync(data.socketPath)) {
+              return data.socketPath;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // 2. Default socket ~/.dino/dino.sock
+    const defaultSock = path.join(dinoDir, 'dino.sock');
+    if (fs.existsSync(defaultSock)) return defaultSock;
+
+    // 3. Fallback to any active worker socket
+    if (fs.existsSync(workersDir)) {
+      try {
         const files = fs.readdirSync(workersDir);
         const sock = files.find((f: string) => f.endsWith('.sock'));
         if (sock) return path.join(workersDir, sock);
-      }
-    } catch {
-      // fallback
+      } catch {}
     }
     return undefined;
+  }
+
+  static resolveBinary(autoDownload: boolean = true): string | null {
+    if (process.env.DINO_BIN && fs.existsSync(process.env.DINO_BIN)) {
+      return process.env.DINO_BIN;
+    }
+    const appPath = '/Applications/Dino.app/Contents/MacOS/dino';
+    if (fs.existsSync(appPath)) return appPath;
+
+    const userBin = path.join(os.homedir(), '.dino', 'bin', 'dino');
+    if (fs.existsSync(userBin)) return userBin;
+
+    try {
+      const { execSync } = require('child_process');
+      const p = execSync('which dino 2>/dev/null', { encoding: 'utf8' }).trim();
+      if (p && fs.existsSync(p)) return p;
+    } catch {}
+
+    if (autoDownload && os.platform() === 'darwin') {
+      const { execSync } = require('child_process');
+      const version = '0.42';
+      const url = `https://github.com/tarunbtw/dino/releases/download/v${version}/Dino-${version}.zip`;
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dino-dl-'));
+      const zipPath = path.join(tmpDir, `Dino-${version}.zip`);
+      const extDir = path.join(tmpDir, 'ext');
+      try {
+        execSync(`curl -fsSL "${url}" -o "${zipPath}"`, { stdio: 'ignore' });
+        fs.mkdirSync(extDir, { recursive: true });
+        execSync(`ditto -x -k "${zipPath}" "${extDir}"`, { stdio: 'ignore' });
+        let bin = path.join(extDir, 'Dino.app', 'Contents', 'MacOS', 'dino');
+        if (!fs.existsSync(bin)) bin = path.join(extDir, 'Dino.app', 'Contents', 'MacOS', 'Dino');
+        if (fs.existsSync(bin)) {
+          fs.mkdirSync(path.dirname(userBin), { recursive: true, mode: 0o755 });
+          fs.copyFileSync(bin, userBin);
+          fs.chmodSync(userBin, 0o755);
+          return userBin;
+        }
+      } catch {} finally {
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      }
+    }
+    return null;
+  }
+
+  static async waitForSocket(profile?: string, timeoutMs: number = 3000): Promise<string> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const sock = Dino.resolveSocketPath(profile);
+      if (sock && fs.existsSync(sock)) return sock;
+      await new Promise(r => setTimeout(r, 50));
+    }
+    throw new Error(`Dino socket not found after ${timeoutMs}ms. Ensure engine is running.`);
+  }
+
+  /**
+   * Spawns an isolated background Dino engine and returns a connected Dino client instance.
+   */
+  static async launch(options: LaunchOptions = {}): Promise<Dino> {
+    const headless = options.headless ?? true;
+    const profile = options.profile ?? 'agent';
+    const idleTimeout = options.idleTimeout ?? 60;
+    const binary = options.binPath ?? Dino.resolveBinary(true);
+
+    if (!binary) {
+      throw new Error('Dino binary not found. Run "npx dino-browser install" or install /Applications/Dino.app');
+    }
+
+    const spawnArgs = [...(options.args || [])];
+    if (headless && !spawnArgs.includes('--headless')) spawnArgs.push('--headless');
+    if (!spawnArgs.includes('--profile')) spawnArgs.push('--profile', profile);
+    if (!spawnArgs.includes('--idle-timeout')) spawnArgs.push('--idle-timeout', String(idleTimeout));
+    if (options.port) spawnArgs.push('--port', String(options.port));
+
+    const { spawn } = require('child_process');
+    const child = spawn(binary, spawnArgs, {
+      detached: true,
+      stdio: 'ignore',
+      env: process.env
+    });
+    child.unref();
+
+    const socketPath = await Dino.waitForSocket(profile, 4000);
+    return new Dino({ socketPath, port: options.port });
   }
 
   private request<T = any>(method: string, endpoint: string, body?: any, timeoutMs: number = 30000): Promise<T> {

@@ -1,15 +1,27 @@
 {
   "name": "dino-browser",
-  "version": "0.41.0",
+  "version": "0.42.0",
   "description": "Official TypeScript/JavaScript SDK for Dino - the ultra-light native macOS agentic browser engine",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "dino": "bin/dino.js"
+    "dino": "bin/dino.js",
+    "dino-browser": "bin/dino.js"
   },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "prepare": "tsc"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tarunbtw/dino.git"
+  },
+  "homepage": "https://github.com/tarunbtw/dino#readme",
   "keywords": [
     "dino",
     "dino-browser",

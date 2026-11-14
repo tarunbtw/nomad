@@ -47,7 +47,7 @@ rollback_on_failure() {
     echo "" >&2
     echo "⚠️  Release aborted or failed. Rolling back local changes..." >&2
     # Restore any modified version files in dino repository
-    git checkout -- dino.xcodeproj/project.pbxproj dino/Services/DinoVersion.swift packaging/homebrew/dino.rb appcast.json 2>/dev/null || true
+    git checkout -- dino.xcodeproj/project.pbxproj dino/Services/DinoVersion.swift packaging/homebrew/dino.rb appcast.json sdks/typescript/package.json sdks/typescript/bin/dino.js sdks/python/pyproject.toml sdks/python/dino_browser/__init__.py 2>/dev/null || true
     # Restore tap repository cask
     if [ -d "$TAP_DIR" ]; then
       (cd "$TAP_DIR" && git checkout -- Casks/dino.rb 2>/dev/null || true)
@@ -105,12 +105,26 @@ if [ -n "$(cd "$TAP_DIR" && git status --porcelain)" ]; then
   exit 1
 fi
 
-# 3. Version Update in project.pbxproj, DinoVersion.swift, local packaging, and tap
+# 3. Version Update in project.pbxproj, DinoVersion.swift, local packaging, tap, and SDKs
 echo "==> Updating version numbers to ${NEW_VERSION}..."
 sed -i '' -E "s/MARKETING_VERSION = [0-9.]+;/MARKETING_VERSION = ${NEW_VERSION};/g" dino.xcodeproj/project.pbxproj
 sed -i '' -E "s/static let version = \"[0-9.]+\"/static let version = \"${NEW_VERSION}\"/g" dino/Services/DinoVersion.swift
 sed -i '' -E "s/version \"[0-9.]+\"/version \"${NEW_VERSION}\"/g" packaging/homebrew/dino.rb
 sed -i '' -E "s/version \"[0-9.]+\"/version \"${NEW_VERSION}\"/g" "$TAP_DIR/Casks/dino.rb"
+
+# SDK versions (standardize to SemVer for npm and pip)
+if [[ "$NEW_VERSION" =~ \.[0-9]+\.[0-9]+ ]]; then
+  SDK_VERSION="${NEW_VERSION}"
+else
+  SDK_VERSION="${NEW_VERSION}.0"
+fi
+sed -i '' -E "s/\"version\": \"[0-9.]+\"/\"version\": \"${SDK_VERSION}\"/g" sdks/typescript/package.json
+sed -i '' -E "s/const DINO_VERSION = '[0-9.]+';/const DINO_VERSION = '${NEW_VERSION}';/g" sdks/typescript/bin/dino.js
+sed -i '' -E "s/version = \"[0-9.]+\"/version = \"${SDK_VERSION}\"/g" sdks/python/pyproject.toml
+sed -i '' -E "s/__version__ = \"[0-9.]+\"/__version__ = \"${SDK_VERSION}\"/g" sdks/python/dino_browser/__init__.py
+
+echo "==> Rebuilding TypeScript SDK..."
+(cd "$PROJECT_ROOT/sdks/typescript" && npm run build)
 
 # 4. Clean & Build Release via Xcode (Zero Warnings & Zero Errors Enforcement)
 echo "==> Cleaning old build artifacts and preparing fresh build directory..."
@@ -241,9 +255,17 @@ git commit -m "dino: bump to ${NEW_VERSION}"
 git push origin main
 cd "$PROJECT_ROOT"
 
+# 13. Publish NPM package
+echo "==> Publishing NPM package dino-browser..."
+if npm whoami >/dev/null 2>&1; then
+  (cd "$PROJECT_ROOT/sdks/typescript" && npm publish --access public) || echo "⚠️  NPM publish encountered an error, continuing..."
+else
+  echo "ℹ️  NPM not logged in, skipping npm publish. Run 'npm login && npm publish' inside sdks/typescript when ready."
+fi
+
 RELEASE_SUCCESS=true
 
-# 13. Final Summary
+# 14. Final Summary
 echo ""
 echo "=========================================================="
 echo "🎉 Dino v${NEW_VERSION} successfully published and distributed!"
@@ -252,5 +274,6 @@ echo "  Archive:   ${ZIP_PATH}"
 echo "  SHA-256:   ${SHA256}"
 echo "  Release:   https://github.com/tarunbtw/dino/releases/tag/v${NEW_VERSION}"
 echo "  Homebrew:  Pushed to tarunbtw/homebrew-tap (brew update && brew upgrade dino)"
+echo "  NPM:       dino-browser (v${SDK_VERSION})"
 echo "=========================================================="
 echo ""
