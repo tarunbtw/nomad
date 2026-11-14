@@ -1,6 +1,6 @@
 {
   "name": "dino-browser",
-  "version": "0.43.0",
+  "version": "0.44.0",
   "description": "Official TypeScript/JavaScript SDK for Dino - the ultra-light native macOS agentic browser engine",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
